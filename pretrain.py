@@ -23,6 +23,7 @@ from models.ema import EMAHelper
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import get_model_source_path, load_model_class
+from utils.tracking import log_arc_predictions
 
 
 class LossConfig(pydantic.BaseModel):
@@ -84,6 +85,11 @@ class PretrainConfig(pydantic.BaseModel):
     freeze_weights: bool = False  # If True, freeze weights and only learn the embeddings
 
     max_train_puzzles: Optional[int] = None  # Limit training to first N puzzles
+
+    # Prediction visualization logging (ARC-specific)
+    log_predictions_every: Optional[int] = None  # Log predictions every N steps (None to disable)
+    log_predictions_max_samples: int = 32  # Max samples per log
+    log_predictions_crop: bool = True  # If True, crop to content; if False, show full 30x30
 
 
 @dataclass
@@ -326,10 +332,11 @@ def train_batch(
     global_batch_size: int,
     rank: int,
     world_size: int,
+    return_preds: bool = False,
 ):
     train_state.step += 1
     if train_state.step > train_state.total_steps:  # At most train_total_steps
-        return
+        return None, None, None
 
     # To device
     batch = {k: v.cuda() for k, v in batch.items()}
@@ -340,7 +347,8 @@ def train_batch(
             train_state.carry = train_state.model.initial_carry(batch)  # type: ignore
 
     # Forward
-    train_state.carry, loss, metrics, _, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=[])
+    return_keys = ["preds"] if return_preds else []
+    train_state.carry, loss, metrics, preds, _ = train_state.model(carry=train_state.carry, batch=batch, return_keys=return_keys)
 
     ((1 / global_batch_size) * loss).backward()
 
@@ -383,7 +391,9 @@ def train_batch(
             }
 
             reduced_metrics["train/lr"] = lr_this_step
-            return reduced_metrics
+            return reduced_metrics, batch if return_preds else None, preds if return_preds else None
+
+    return None, None, None
 
 
 def evaluate(
@@ -403,6 +413,12 @@ def evaluate(
         for evaluator in evaluators:
             evaluator.begin_eval()
             return_keys.update(evaluator.required_outputs)
+
+        # Add preds to return_keys if prediction logging is enabled
+        log_eval_preds = config.log_predictions_every is not None
+        if log_eval_preds:
+            return_keys.add("preds")
+            eval_pred_samples = {"inputs": [], "labels": [], "preds": []}
 
         # Run evaluation
         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
@@ -447,6 +463,16 @@ def evaluate(
 
             for evaluator in evaluators:
                 evaluator.update_batch(batch, preds)
+
+            # Collect samples for prediction logging (only on rank 0, up to max_samples)
+            if log_eval_preds and rank == 0:
+                collected = len(eval_pred_samples["inputs"])
+                remaining = config.log_predictions_max_samples - collected
+                if remaining > 0:
+                    n = min(remaining, batch["inputs"].size(0))
+                    eval_pred_samples["inputs"].append(batch["inputs"][:n].cpu())
+                    eval_pred_samples["labels"].append(batch["labels"][:n].cpu())
+                    eval_pred_samples["preds"].append(preds["preds"][:n].cpu())
 
             del carry, loss, preds, batch, all_finish
 
@@ -527,6 +553,17 @@ def evaluate(
 
         if rank == 0:
             print("All evaluators completed!")
+
+        # Log evaluation predictions
+        if log_eval_preds and rank == 0 and eval_pred_samples["inputs"]:
+            log_arc_predictions(
+                inputs=torch.cat(eval_pred_samples["inputs"], dim=0),
+                labels=torch.cat(eval_pred_samples["labels"], dim=0),
+                preds=torch.cat(eval_pred_samples["preds"], dim=0),
+                max_samples=config.log_predictions_max_samples,
+                table_name="eval_predictions",
+                crop=config.log_predictions_crop,
+            )
 
     return reduced_metrics
 
@@ -673,18 +710,38 @@ def launch(hydra_config: DictConfig):
             print("TRAIN")
         train_state.model.train()
         for set_name, batch, global_batch_size in train_loader:
-            metrics = train_batch(
+            # Check if we should log predictions this step (step+1 because train_batch increments first)
+            next_step = train_state.step + 1
+            should_log_preds = (
+                config.log_predictions_every is not None
+                and next_step % config.log_predictions_every == 0
+            )
+
+            metrics, batch_out, preds_out = train_batch(
                 config,
                 train_state,
                 batch,
                 global_batch_size,
                 rank=RANK,
                 world_size=WORLD_SIZE,
+                return_preds=should_log_preds,
             )
 
             if RANK == 0 and metrics is not None:
                 wandb.log(metrics, step=train_state.step)
                 progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
+
+                # Log training predictions if requested
+                if should_log_preds and batch_out is not None and preds_out is not None:
+                    log_arc_predictions(
+                        inputs=batch_out["inputs"],
+                        labels=batch_out["labels"],
+                        preds=preds_out["preds"],
+                        max_samples=config.log_predictions_max_samples,
+                        table_name="train_predictions",
+                        crop=config.log_predictions_crop,
+                    )
+
             if config.ema:
                 ema_helper.update(train_state.model)
 
