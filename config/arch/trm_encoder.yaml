@@ -1,0 +1,38 @@
+# Encoder-based TRM architecture config
+name: recursive_reasoning.etrm@TRMWithEncoder
+loss:
+  name: losses@ACTLossHead
+  loss_type: stablemax_cross_entropy
+
+# Encoder settings
+encoder_num_layers: 2
+
+# Halting settings
+halt_exploration_prob: 0.1
+halt_max_steps: 16
+
+# TRM reasoning cycles
+H_cycles: 3
+L_cycles: 6
+
+H_layers: 0
+L_layers: 2
+
+# Transformer config
+hidden_size: 512
+num_heads: 8
+expansion: 4
+
+# Context length (encoder output tokens)
+puzzle_emb_len: 16
+
+# Position encodings
+pos_encodings: rope
+forward_dtype: bfloat16
+
+# Optional settings
+mlp_t: False
+no_ACT_continue: True
+
+# Compatibility (not used in encoder mode)
+puzzle_emb_ndim: 0

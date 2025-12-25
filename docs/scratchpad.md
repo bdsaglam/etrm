@@ -4,18 +4,22 @@ data_paths="[data/arc1concept-aug-1000]" \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
 ema=True \
-max_train_puzzles=100 \
-+run_name="repro_subset"
+epochs=1000 \
+eval_interval=100 \
++project_name="mmi-714" \
++run_name="repro"
 
 
 torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
 arch=trm \
 data_paths="[data/arc1concept-aug-1000]" \
-max_train_puzzles=100 \
 arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
 ema=True \
 log_predictions_every=100 \
+epochs=1000 \
+eval_interval=100 \
++project_name="mmi-714" \
 +run_name="repro_visualization"
 
 
@@ -30,4 +34,24 @@ arch.L_layers=2 \
 arch.H_cycles=3 arch.L_cycles=4 \
 ema=True \
 log_predictions_every=100 \
+epochs=1000 \
+eval_interval=100 \
++project_name="mmi-714" \
 +run_name="encoder_data_verification"
+
+
+# ========== ENCODER-BASED TRM TRAINING ==========
+# Train TRM with demo encoder (replaces learned puzzle embeddings)
+# Uses: pretrain_encoder.py, config/cfg_pretrain_encoder.yaml, config/arch/trm_encoder.yaml
+# Model: models/recursive_reasoning/etrm.py (TRMWithEncoder)
+# Dataset: dataset/fewshot_puzzle_dataset.py (FewShotPuzzleDataset)
+
+torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=4 \
+ema=True \
+log_predictions_every=100 \
+epochs=1000 \
+eval_interval=100 \
++project_name="mmi-714" \
++run_name="encoder_trm_v1"
