@@ -2,10 +2,17 @@
 Standard (deterministic) demonstration encoder.
 
 Architecture:
-1. DemoGridEncoder: Encodes each (input, output) pair into a single vector
-2. DemoSetEncoder: Aggregates multiple demo vectors via cross-attention
+1. DemoGridEncoder: Encodes each (input, output) pair into a fixed-size representation
+2. DemoSetEncoder: Aggregates multiple demo encodings via cross-attention
 
 The output replaces the puzzle_id embedding in TRM.
+
+Configurable options (see DemoEncoderConfig):
+- pooling_method: "mean" (default), "attention", "weighted"
+- set_encoder_layers: depth of set aggregation (default 1)
+- layer_scale_init: CaiT-style layer scaling (default 0 = disabled)
+- norm_style: "pre" or "post" normalization
+- qk_norm: normalize Q/K in attention
 """
 
 import math
@@ -29,11 +36,17 @@ from models.layers import (
 
 
 class DemoGridEncoderBlock(nn.Module):
-    """Single transformer block for encoding demo grids."""
+    """Single transformer block for encoding demo grids.
+
+    Supports:
+    - Pre-norm vs post-norm
+    - Layer scale (CaiT-style)
+    """
 
     def __init__(self, config: DemoEncoderConfig):
         super().__init__()
         self.config = config
+        self.norm_style = config.norm_style
 
         self.self_attn = Attention(
             hidden_size=config.hidden_size,
@@ -48,17 +61,49 @@ class DemoGridEncoderBlock(nn.Module):
         )
         self.norm_eps = config.rms_norm_eps
 
+        # Layer scale parameters (CaiT-style)
+        self.use_layer_scale = config.layer_scale_init > 0
+        if self.use_layer_scale:
+            self.gamma_1 = nn.Parameter(
+                config.layer_scale_init * torch.ones(config.hidden_size)
+            )
+            self.gamma_2 = nn.Parameter(
+                config.layer_scale_init * torch.ones(config.hidden_size)
+            )
+
     def forward(self, hidden_states: torch.Tensor, cos_sin) -> torch.Tensor:
-        # Self attention + residual + norm
-        hidden_states = rms_norm(
-            hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states),
-            variance_epsilon=self.norm_eps,
-        )
-        # MLP + residual + norm
-        hidden_states = rms_norm(
-            hidden_states + self.mlp(hidden_states),
-            variance_epsilon=self.norm_eps,
-        )
+        if self.norm_style == "pre":
+            # Pre-norm: norm before attention/mlp (more stable)
+            attn_out = self.self_attn(
+                cos_sin=cos_sin,
+                hidden_states=rms_norm(hidden_states, variance_epsilon=self.norm_eps)
+            )
+            if self.use_layer_scale:
+                attn_out = self.gamma_1 * attn_out
+            hidden_states = hidden_states + attn_out
+
+            mlp_out = self.mlp(rms_norm(hidden_states, variance_epsilon=self.norm_eps))
+            if self.use_layer_scale:
+                mlp_out = self.gamma_2 * mlp_out
+            hidden_states = hidden_states + mlp_out
+        else:
+            # Post-norm: norm after attention/mlp (original transformer)
+            attn_out = self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states)
+            if self.use_layer_scale:
+                attn_out = self.gamma_1 * attn_out
+            hidden_states = rms_norm(
+                hidden_states + attn_out,
+                variance_epsilon=self.norm_eps,
+            )
+
+            mlp_out = self.mlp(hidden_states)
+            if self.use_layer_scale:
+                mlp_out = self.gamma_2 * mlp_out
+            hidden_states = rms_norm(
+                hidden_states + mlp_out,
+                variance_epsilon=self.norm_eps,
+            )
+
         return hidden_states
 
 
@@ -68,12 +113,18 @@ class DemoGridEncoder(nn.Module):
 
     Takes: input grid (seq_len,) + output grid (seq_len,)
     Returns: single vector (hidden_size,)
+
+    Pooling methods:
+    - "mean": simple mean pooling (loses positional info)
+    - "attention": learned query cross-attends to sequence (preserves position)
+    - "weighted": attention-weighted mean (lightweight alternative)
     """
 
     def __init__(self, config: DemoEncoderConfig):
         super().__init__()
         self.config = config
         self.forward_dtype = getattr(torch, config.forward_dtype)
+        self.pooling_method = config.pooling_method
 
         # Separate embeddings for input and output grids
         embed_scale = math.sqrt(config.hidden_size)
@@ -100,10 +151,95 @@ class DemoGridEncoder(nn.Module):
             DemoGridEncoderBlock(config) for _ in range(config.num_layers)
         ])
 
-        # Pooling projection (mean pool then project)
+        # Pooling components
+        if self.pooling_method == "attention":
+            # Attention pooling: learned query cross-attends to sequence
+            self.pool_query = nn.Parameter(
+                trunc_normal_init_(
+                    torch.empty(1, config.hidden_size, dtype=self.forward_dtype),
+                    std=0.02
+                )
+            )
+            # Cross-attention components
+            head_dim = config.hidden_size // config.num_heads
+            self.pool_q_proj = CastedLinear(config.hidden_size, config.hidden_size, bias=False)
+            self.pool_k_proj = CastedLinear(config.hidden_size, config.hidden_size, bias=False)
+            self.pool_v_proj = CastedLinear(config.hidden_size, config.hidden_size, bias=False)
+            self.pool_o_proj = CastedLinear(config.hidden_size, config.hidden_size, bias=False)
+            self.pool_num_heads = config.num_heads
+            self.pool_head_dim = head_dim
+        elif self.pooling_method == "weighted":
+            # Weighted pooling: learned attention weights
+            self.pool_weight_proj = CastedLinear(config.hidden_size, 1, bias=False)
+
+        # Output projection (all pooling methods)
         self.pool_proj = CastedLinear(config.hidden_size, config.hidden_size, bias=False)
 
         self.embed_scale = embed_scale
+        self.norm_eps = config.rms_norm_eps
+
+    def _attention_pool(
+        self,
+        hidden: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Attention pooling with learned query."""
+        batch_size = hidden.shape[0]
+
+        # Expand query for batch
+        query = self.pool_query.expand(batch_size, -1, -1)  # (B, 1, D)
+
+        # Project Q, K, V
+        q = self.pool_q_proj(query)  # (B, 1, D)
+        k = self.pool_k_proj(hidden)  # (B, 2*S, D)
+        v = self.pool_v_proj(hidden)  # (B, 2*S, D)
+
+        # Reshape for multi-head attention
+        q = q.view(batch_size, 1, self.pool_num_heads, self.pool_head_dim).transpose(1, 2)
+        k = k.view(batch_size, -1, self.pool_num_heads, self.pool_head_dim).transpose(1, 2)
+        v = v.view(batch_size, -1, self.pool_num_heads, self.pool_head_dim).transpose(1, 2)
+
+        # Create attention mask
+        attn_mask = mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, 2*S)
+        attn_mask = attn_mask.expand(-1, self.pool_num_heads, 1, -1)
+        attn_bias = torch.zeros_like(attn_mask, dtype=q.dtype)
+        attn_bias.masked_fill_(~attn_mask, float("-inf"))
+
+        # Scaled dot-product attention
+        attn_output = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_bias)
+
+        # Reshape and project
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, -1)
+        return self.pool_o_proj(attn_output.unsqueeze(1)).squeeze(1)  # (B, D)
+
+    def _weighted_pool(
+        self,
+        hidden: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Weighted mean pooling with learned attention weights."""
+        # Compute attention weights
+        weights = self.pool_weight_proj(hidden).squeeze(-1)  # (B, 2*S)
+
+        # Mask invalid positions
+        weights = weights.masked_fill(~mask, float("-inf"))
+        weights = F.softmax(weights, dim=-1)  # (B, 2*S)
+
+        # Weighted sum
+        pooled = (weights.unsqueeze(-1) * hidden).sum(dim=1)  # (B, D)
+        return pooled
+
+    def _mean_pool(
+        self,
+        hidden: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Simple mean pooling over non-PAD tokens."""
+        mask_expanded = mask.unsqueeze(-1).to(hidden.dtype)  # (B, 2*S, 1)
+        masked_hidden = hidden * mask_expanded
+        token_counts = mask_expanded.sum(dim=1).clamp(min=1)  # (B, 1)
+        pooled = masked_hidden.sum(dim=1) / token_counts  # (B, D)
+        return pooled
 
     def forward(
         self,
@@ -134,39 +270,32 @@ class DemoGridEncoder(nn.Module):
             hidden = layer(hidden, cos_sin)
 
         # Create mask for non-PAD tokens (PAD = 0)
-        # Concatenate input and output grids to get mask for full sequence
         full_grid = torch.cat([input_grid, output_grid], dim=1)  # (B, 2*S)
-        token_mask = (full_grid != 0).unsqueeze(-1)  # (B, 2*S, 1) - True for non-PAD
+        token_mask = (full_grid != 0)  # (B, 2*S) - True for non-PAD
 
-        # Masked mean pool: only average over non-PAD positions
-        masked_hidden = hidden * token_mask.to(hidden.dtype)
-        token_counts = token_mask.sum(dim=1).clamp(min=1)  # (B, 1) - avoid div by zero
-        pooled = masked_hidden.sum(dim=1) / token_counts  # (B, D)
+        # Apply pooling method
+        if self.pooling_method == "attention":
+            pooled = self._attention_pool(hidden, token_mask)
+        elif self.pooling_method == "weighted":
+            pooled = self._weighted_pool(hidden, token_mask)
+        else:  # "mean"
+            pooled = self._mean_pool(hidden, token_mask)
 
-        # Project
+        # Project and return
         return self.pool_proj(pooled)
 
 
-class DemoSetEncoder(nn.Module):
-    """
-    Aggregates multiple demo encodings via cross-attention.
+class DemoSetEncoderLayer(nn.Module):
+    """Single cross-attention layer for set encoding.
 
-    Takes: demo encodings (batch, num_demos, hidden_size)
-    Returns: context (batch, output_tokens, hidden_size)
+    Queries attend to demo encodings, then apply MLP.
+    Supports pre/post norm and layer scale.
     """
 
     def __init__(self, config: DemoEncoderConfig):
         super().__init__()
         self.config = config
-        self.forward_dtype = getattr(torch, config.forward_dtype)
-
-        # Learnable query tokens
-        self.query_tokens = nn.Parameter(
-            trunc_normal_init_(
-                torch.empty(config.output_tokens, config.hidden_size, dtype=self.forward_dtype),
-                std=1.0,
-            )
-        )
+        self.norm_style = config.norm_style
 
         # Cross-attention components
         head_dim = config.hidden_size // config.num_heads
@@ -183,6 +312,121 @@ class DemoSetEncoder(nn.Module):
             hidden_size=config.hidden_size,
             expansion=config.expansion,
         )
+        self.norm_eps = config.rms_norm_eps
+
+        # Layer scale
+        self.use_layer_scale = config.layer_scale_init > 0
+        if self.use_layer_scale:
+            self.gamma_1 = nn.Parameter(
+                config.layer_scale_init * torch.ones(config.hidden_size)
+            )
+            self.gamma_2 = nn.Parameter(
+                config.layer_scale_init * torch.ones(config.hidden_size)
+            )
+
+    def _cross_attention(
+        self,
+        queries: torch.Tensor,
+        demo_encodings: torch.Tensor,
+        attn_bias: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute cross-attention from queries to demo encodings."""
+        batch_size = queries.shape[0]
+
+        # Project Q, K, V
+        q = self.q_proj(queries)  # (B, T, D)
+        k = self.k_proj(demo_encodings)  # (B, K, D)
+        v = self.v_proj(demo_encodings)  # (B, K, D)
+
+        # Reshape for multi-head attention
+        q = q.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Scaled dot-product attention
+        attn_output = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_bias)
+
+        # Reshape back
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(batch_size, -1, self.config.hidden_size)
+
+        return self.o_proj(attn_output)
+
+    def forward(
+        self,
+        queries: torch.Tensor,
+        demo_encodings: torch.Tensor,
+        attn_bias: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            queries: (batch, output_tokens, hidden_size)
+            demo_encodings: (batch, num_demos, hidden_size)
+            attn_bias: (batch, num_heads, output_tokens, num_demos) - attention mask
+
+        Returns:
+            Updated queries: (batch, output_tokens, hidden_size)
+        """
+        if self.norm_style == "pre":
+            # Pre-norm
+            attn_out = self._cross_attention(
+                rms_norm(queries, variance_epsilon=self.norm_eps),
+                demo_encodings,
+                attn_bias,
+            )
+            if self.use_layer_scale:
+                attn_out = self.gamma_1 * attn_out
+            queries = queries + attn_out
+
+            mlp_out = self.mlp(rms_norm(queries, variance_epsilon=self.norm_eps))
+            if self.use_layer_scale:
+                mlp_out = self.gamma_2 * mlp_out
+            queries = queries + mlp_out
+        else:
+            # Post-norm
+            attn_out = self._cross_attention(queries, demo_encodings, attn_bias)
+            if self.use_layer_scale:
+                attn_out = self.gamma_1 * attn_out
+            queries = rms_norm(queries + attn_out, variance_epsilon=self.norm_eps)
+
+            mlp_out = self.mlp(queries)
+            if self.use_layer_scale:
+                mlp_out = self.gamma_2 * mlp_out
+            queries = rms_norm(queries + mlp_out, variance_epsilon=self.norm_eps)
+
+        return queries
+
+
+class DemoSetEncoder(nn.Module):
+    """
+    Aggregates multiple demo encodings via cross-attention.
+
+    Takes: demo encodings (batch, num_demos, hidden_size)
+    Returns: context (batch, output_tokens, hidden_size)
+
+    Supports multiple cross-attention layers (set_encoder_layers config).
+    """
+
+    def __init__(self, config: DemoEncoderConfig):
+        super().__init__()
+        self.config = config
+        self.forward_dtype = getattr(torch, config.forward_dtype)
+
+        # Learnable query tokens
+        self.query_tokens = nn.Parameter(
+            trunc_normal_init_(
+                torch.empty(config.output_tokens, config.hidden_size, dtype=self.forward_dtype),
+                std=0.02,  # Changed from 1.0 to 0.02 (better init)
+            )
+        )
+
+        # Stack of cross-attention layers
+        num_layers = config.set_encoder_layers
+        self.layers = nn.ModuleList([
+            DemoSetEncoderLayer(config) for _ in range(num_layers)
+        ])
+
+        self.num_heads = config.num_heads
         self.norm_eps = config.rms_norm_eps
 
     def forward(
@@ -203,48 +447,17 @@ class DemoSetEncoder(nn.Module):
         batch_size = demo_encodings.shape[0]
 
         # Expand query tokens for batch
-        queries = self.query_tokens.unsqueeze(0).expand(batch_size, -1, -1)  # (B, T, D)
+        context = self.query_tokens.unsqueeze(0).expand(batch_size, -1, -1)  # (B, T, D)
 
-        # Project Q, K, V
-        q = self.q_proj(queries)  # (B, T, D)
-        k = self.k_proj(demo_encodings)  # (B, K, D)
-        v = self.v_proj(demo_encodings)  # (B, K, D)
-
-        # Reshape for multi-head attention
-        q = q.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, T, d)
-        k = k.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, K, d)
-        v = v.view(batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, K, d)
-
-        # Create attention mask from demo_mask
-        # demo_mask: (B, K) -> attn_mask: (B, 1, 1, K) for broadcasting
+        # Create attention mask (shared across layers)
         attn_mask = demo_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, K)
         attn_mask = attn_mask.expand(-1, self.num_heads, self.config.output_tokens, -1)
-
-        # Scaled dot-product attention with mask
-        # PyTorch expects mask where True = attend, but we need to convert for additive mask
-        attn_bias = torch.zeros_like(attn_mask, dtype=q.dtype)
+        attn_bias = torch.zeros_like(attn_mask, dtype=context.dtype)
         attn_bias.masked_fill_(~attn_mask, float("-inf"))
 
-        attn_output = F.scaled_dot_product_attention(
-            q, k, v,
-            attn_mask=attn_bias,
-        )  # (B, H, T, d)
-
-        # Reshape back
-        attn_output = attn_output.transpose(1, 2).contiguous()  # (B, T, H, d)
-        attn_output = attn_output.view(batch_size, -1, self.config.hidden_size)  # (B, T, D)
-
-        # Output projection + residual + norm
-        context = rms_norm(
-            queries + self.o_proj(attn_output),
-            variance_epsilon=self.norm_eps,
-        )
-
-        # MLP + residual + norm
-        context = rms_norm(
-            context + self.mlp(context),
-            variance_epsilon=self.norm_eps,
-        )
+        # Apply cross-attention layers
+        for layer in self.layers:
+            context = layer(context, demo_encodings, attn_bias)
 
         return context
 

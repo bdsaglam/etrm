@@ -5,7 +5,12 @@ loss:
   loss_type: stablemax_cross_entropy
 
 # Encoder settings
-encoder_num_layers: 2
+encoder_num_layers: 2          # Depth of grid encoder (per-demo transformer)
+encoder_pooling_method: mean   # "mean", "attention", or "weighted"
+encoder_set_layers: 1          # Depth of set encoder (cross-attention layers)
+encoder_layer_scale_init: 0.0  # CaiT layer scale (0 = disabled, try 1e-4)
+encoder_norm_style: post       # "pre" or "post" normalization
+encoder_qk_norm: False         # QK normalization in attention
 
 # Halting settings
 halt_exploration_prob: 0.1

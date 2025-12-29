@@ -65,6 +65,18 @@ class TRMEncoderConfig(BaseModel):
     # Encoder settings
     encoder_num_layers: int = 2
 
+    # === Encoder architecture improvements ===
+    # Pooling method: "mean", "attention", "weighted"
+    encoder_pooling_method: str = "mean"
+    # Set encoder layers (cross-attention depth)
+    encoder_set_layers: int = 1
+    # Layer scale init value (0 = disabled)
+    encoder_layer_scale_init: float = 0.0
+    # Norm style: "pre" or "post"
+    encoder_norm_style: str = "post"
+    # QK normalization in attention
+    encoder_qk_norm: bool = False
+
     # TRM reasoning settings
     H_cycles: int
     L_cycles: int
@@ -337,6 +349,12 @@ class TRMWithEncoder(nn.Module):
             expansion=self.config.expansion,
             rms_norm_eps=self.config.rms_norm_eps,
             forward_dtype=self.config.forward_dtype,
+            # Architecture improvements
+            pooling_method=self.config.encoder_pooling_method,
+            set_encoder_layers=self.config.encoder_set_layers,
+            layer_scale_init=self.config.encoder_layer_scale_init,
+            norm_style=self.config.encoder_norm_style,
+            qk_norm=self.config.encoder_qk_norm,
         )
         self.encoder = StandardDemoEncoder(encoder_config)
 

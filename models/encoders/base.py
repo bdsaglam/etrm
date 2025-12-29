@@ -13,22 +13,77 @@ from pydantic import BaseModel
 
 
 class DemoEncoderConfig(BaseModel):
-    """Configuration for demonstration encoders."""
+    """Configuration for demonstration encoders.
+
+    Two encoder architecture families are available:
+
+    1. Original (StandardDemoEncoder, VariationalDemoEncoder):
+       - Grid encoder: shallow transformer (2 layers default)
+       - Set encoder: cross-attention aggregation
+       - Configurable pooling: mean, attention, or weighted
+
+    2. LPN-style (LPNStandardEncoder, LPNVariationalEncoder, LPNVariationalEncoderV2):
+       - Based on "Searching Latent Program Spaces" paper
+       - Deep transformer (8 layers default)
+       - CLS token pooling
+       - Simple mean aggregation (no cross-attention set encoder)
+
+    Use `encoder_type` to select the architecture.
+    """
+
+    # === Encoder type selection ===
+    # "standard": Original architecture with cross-attention set encoder
+    # "variational": Original with VAE bottleneck
+    # "lpn_standard": LPN-style deep encoder with CLS pooling
+    # "lpn_variational": LPN-style with per-demo VAE (LPN paper style)
+    # "lpn_variational_v2": LPN-style with aggregate-first VAE (simpler)
+    encoder_type: str = "standard"
+
+    # === Common settings ===
     hidden_size: int = 512
     num_heads: int = 8
-    num_layers: int = 2
-    output_tokens: int = 16  # Number of output context tokens (matches puzzle_emb_len)
-    vocab_size: int = 12     # 0=PAD, 1=EOS, 2-11=colors
-    seq_len: int = 900       # 30x30 grid flattened
-    expansion: float = 4.0   # MLP expansion factor
+    num_layers: int = 2        # Layers in grid encoder (2 for original, 8 for LPN)
+    output_tokens: int = 16    # Number of output context tokens (matches puzzle_emb_len)
+    vocab_size: int = 12       # 0=PAD, 1=EOS, 2-11=colors
+    seq_len: int = 900         # 30x30 grid flattened
+    expansion: float = 4.0     # MLP expansion factor
     rms_norm_eps: float = 1e-5
     forward_dtype: str = "bfloat16"
 
-    # Variational encoder settings
-    variational: bool = False  # Use VAE-style encoding
+    # === Architecture improvements (best practices) ===
+
+    # Pooling method for grid encoder (original architecture only)
+    # "mean": simple mean pooling (loses positional info) - default for backward compat
+    # "attention": learned query cross-attends to sequence (preserves position)
+    # "weighted": attention-weighted mean (lightweight alternative)
+    # Note: LPN encoders always use CLS pooling, this is ignored
+    pooling_method: str = "mean"
+
+    # Set encoder depth (cross-attention layers for aggregating demos)
+    # Original: 1, recommended: 2-3 for complex patterns
+    # Note: LPN encoders use mean aggregation, this is ignored
+    set_encoder_layers: int = 1
+
+    # Layer scale (from CaiT/DeiT) - multiply residual by learnable scalar
+    # Starts small (init_value) and grows during training. Improves stability.
+    # 0 = disabled, typical value: 1e-4
+    layer_scale_init: float = 0.0
+
+    # Pre-norm vs post-norm (pre-norm is more stable)
+    # "pre": x = x + attn(norm(x))  -- GPT-2+, LLaMA style
+    # "post": x = norm(x + attn(x)) -- original transformer
+    # Note: LPN encoders always use pre-norm, this is ignored
+    norm_style: str = "post"  # "post" for backward compat
+
+    # QK normalization (prevents attention logit explosion)
+    # Used in ViT-22B, Gemma. Normalizes Q and K before dot product.
+    qk_norm: bool = False
+
+    # === Variational encoder settings ===
+    variational: bool = False  # Use VAE-style encoding (deprecated, use encoder_type)
     kl_weight: float = 0.001   # Weight for KL divergence loss (beta-VAE)
 
-    # Contrastive learning settings
+    # === Contrastive learning settings ===
     contrastive: bool = False  # Use contrastive loss
     contrastive_weight: float = 0.1  # Weight for contrastive loss
     contrastive_temperature: float = 0.1  # Temperature for InfoNCE
@@ -161,3 +216,46 @@ class BaseDemoEncoder(nn.Module, ABC):
     ) -> torch.Tensor | EncoderOutput:
         """Alias for forward() for clarity."""
         return self.forward(demo_inputs, demo_labels, demo_mask, return_full_output)
+
+
+def create_encoder(config: DemoEncoderConfig) -> BaseDemoEncoder:
+    """
+    Factory function to create an encoder based on config.encoder_type.
+
+    Args:
+        config: DemoEncoderConfig with encoder_type set
+
+    Returns:
+        Encoder instance of the appropriate type
+
+    Raises:
+        ValueError: If encoder_type is not recognized
+    """
+    # Import here to avoid circular imports
+    from models.encoders.standard import StandardDemoEncoder
+    from models.encoders.variational import VariationalDemoEncoder
+    from models.encoders.lpn_standard import LPNStandardEncoder
+    from models.encoders.lpn_variational import LPNVariationalEncoder, LPNVariationalEncoderV2
+
+    encoder_map = {
+        "standard": StandardDemoEncoder,
+        "variational": VariationalDemoEncoder,
+        "lpn_standard": LPNStandardEncoder,
+        "lpn_variational": LPNVariationalEncoder,
+        "lpn_variational_v2": LPNVariationalEncoderV2,
+    }
+
+    encoder_type = config.encoder_type.lower()
+
+    # Handle legacy 'variational' flag for backward compatibility
+    if config.variational and encoder_type == "standard":
+        encoder_type = "variational"
+
+    if encoder_type not in encoder_map:
+        valid_types = ", ".join(encoder_map.keys())
+        raise ValueError(
+            f"Unknown encoder_type: '{config.encoder_type}'. "
+            f"Valid types: {valid_types}"
+        )
+
+    return encoder_map[encoder_type](config)

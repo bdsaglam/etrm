@@ -80,6 +80,13 @@ class PretrainEncoderConfig(pydantic.BaseModel):
     beta1: float
     beta2: float
 
+    # Gradient clipping (0 = disabled)
+    grad_clip_norm: float = 0.0
+
+    # Separate learning rate for encoder (multiplier)
+    # 1.0 = same as base lr, 0.1 = 10x slower, 0 = disabled (single optimizer)
+    encoder_lr_scale: float = 0.0
+
     # NO puzzle_emb_lr - single optimizer for encoder mode
 
     # Names
@@ -152,7 +159,11 @@ def create_model_encoder(
     rank: int,
     world_size: int,
 ):
-    """Create TRMWithEncoder model with single optimizer."""
+    """Create TRMWithEncoder model with optimizer(s).
+
+    If encoder_lr_scale > 0, creates separate optimizers for encoder and inner model.
+    This allows the encoder to learn at a different rate than the inner TRM.
+    """
     model_cfg = dict(
         **config.arch.__pydantic_extra__,  # type: ignore
         batch_size=config.global_batch_size // world_size,
@@ -183,16 +194,50 @@ def create_model_encoder(
                 for param in list(model.parameters()) + list(model.buffers()):
                     dist.broadcast(param, src=0)
 
-    # Single optimizer for encoder mode (no puzzle_emb optimizer)
-    optimizers = [
-        AdamATan2(
-            model.parameters(),
-            lr=0,  # Set by scheduler
-            weight_decay=config.weight_decay,
-            betas=(config.beta1, config.beta2),
-        )
-    ]
-    optimizer_lrs = [config.lr]
+    # Create optimizer(s)
+    if config.encoder_lr_scale > 0:
+        # Separate learning rates for encoder vs inner model
+        # Classify parameters by name (works with compiled models via _orig_mod)
+        encoder_params = []
+        inner_params = []
+
+        for name, param in model.named_parameters():
+            if ".encoder." in name or name.startswith("encoder."):
+                encoder_params.append(param)
+            else:
+                inner_params.append(param)
+
+        if rank == 0:
+            print(f"Separate LRs: {len(encoder_params)} encoder params, {len(inner_params)} inner params")
+            print(f"  Encoder LR: {config.lr * config.encoder_lr_scale:.2e}")
+            print(f"  Inner LR: {config.lr:.2e}")
+
+        optimizers = [
+            AdamATan2(
+                inner_params,
+                lr=0,  # Set by scheduler
+                weight_decay=config.weight_decay,
+                betas=(config.beta1, config.beta2),
+            ),
+            AdamATan2(
+                encoder_params,
+                lr=0,  # Set by scheduler
+                weight_decay=config.weight_decay * 0.1,  # Lower WD for encoder
+                betas=(config.beta1, config.beta2),
+            ),
+        ]
+        optimizer_lrs = [config.lr, config.lr * config.encoder_lr_scale]
+    else:
+        # Single optimizer for all parameters
+        optimizers = [
+            AdamATan2(
+                model.parameters(),
+                lr=0,  # Set by scheduler
+                weight_decay=config.weight_decay,
+                betas=(config.beta1, config.beta2),
+            )
+        ]
+        optimizer_lrs = [config.lr]
 
     return model, optimizers, optimizer_lrs
 
@@ -297,6 +342,30 @@ def create_evaluators(
     return evaluators
 
 
+def compute_gradient_norms(model: nn.Module):
+    """Compute gradient norms for encoder vs inner model components."""
+    encoder_grad_norm_sq = 0.0
+    inner_grad_norm_sq = 0.0
+    total_grad_norm_sq = 0.0
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grad_norm_sq = param.grad.data.norm() ** 2
+            total_grad_norm_sq += grad_norm_sq
+
+            # Classify by component (works with compiled models via _orig_mod)
+            if ".encoder." in name or name.startswith("encoder."):
+                encoder_grad_norm_sq += grad_norm_sq
+            elif ".inner." in name or name.startswith("inner."):
+                inner_grad_norm_sq += grad_norm_sq
+
+    return {
+        "grad/encoder_norm": float(encoder_grad_norm_sq ** 0.5),
+        "grad/inner_norm": float(inner_grad_norm_sq ** 0.5),
+        "grad/total_norm": float(total_grad_norm_sq ** 0.5),
+    }
+
+
 def train_batch_encoder(
     config: PretrainEncoderConfig,
     train_state: TrainState,
@@ -327,6 +396,15 @@ def train_batch_encoder(
 
     ((1 / global_batch_size) * loss).backward()
 
+    # Gradient clipping (before allreduce for consistency)
+    if config.grad_clip_norm > 0:
+        torch.nn.utils.clip_grad_norm_(train_state.model.parameters(), max_norm=config.grad_clip_norm)
+
+    # Compute gradient norms BEFORE allreduce (per-rank grads)
+    grad_norms = {}
+    if rank == 0:
+        grad_norms = compute_gradient_norms(train_state.model)
+
     # Allreduce
     if world_size > 1:
         for param in train_state.model.parameters():
@@ -344,12 +422,21 @@ def train_batch_encoder(
         optim.step()
         optim.zero_grad()
 
-    # Reduce metrics
-    if len(metrics):
-        assert not any(v.requires_grad for v in metrics.values())
+    # Separate encoder diagnostics (scalars) from tensor metrics
+    encoder_diagnostics = {}
+    tensor_metrics = {}
+    for k, v in metrics.items():
+        if k.startswith("encoder_"):
+            encoder_diagnostics[k] = v  # Already a Python float
+        else:
+            tensor_metrics[k] = v
 
-        metric_keys = list(sorted(metrics.keys()))
-        metric_values = torch.stack([metrics[k] for k in metric_keys])
+    # Reduce tensor metrics
+    if len(tensor_metrics):
+        assert not any(v.requires_grad for v in tensor_metrics.values() if isinstance(v, torch.Tensor))
+
+        metric_keys = list(sorted(tensor_metrics.keys()))
+        metric_values = torch.stack([tensor_metrics[k] for k in metric_keys])
         if world_size > 1:
             dist.reduce(metric_values, dst=0)
 
@@ -364,6 +451,14 @@ def train_batch_encoder(
             }
 
             reduced_metrics["train/lr"] = lr_this_step
+
+            # Add encoder diagnostics (already scalars, no reduction needed)
+            for k, v in encoder_diagnostics.items():
+                reduced_metrics[f"train/{k}"] = v
+
+            # Add gradient norms
+            reduced_metrics.update(grad_norms)
+
             return reduced_metrics, batch if return_preds else None, preds if return_preds else None
 
     return None, None, None

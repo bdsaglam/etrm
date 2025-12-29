@@ -142,48 +142,76 @@ DISABLE_COMPILE=1 python pretrain_encoder.py \
 | E0 | Baseline | None (current arch) | ✅ Done | Collapsed at ~1900 | Distribution shift |
 | E1 | Overfit | max_train_puzzles=10 | ⏳ Pending | - | Must pass first |
 | E2 | H2 | LR: 1e-4 → 3e-5 | ⏳ Pending | - | Quick stability test |
-| E3 | H3 | Add grad clip (1.0) | ⏳ Pending | - | Quick stability test |
+| E3 | H3 | grad_clip_norm=1.0 | ⏳ Pending | - | Quick stability test |
 | E4 | H2+H3 | Lower LR + grad clip | ⏳ Pending | - | Combined stability |
-| E5 | H1 | encoder_num_layers: 2→4 | ⏳ Pending | - | After E1 passes |
-| E6 | H4 | puzzle_emb_len: 16→32 | ⏳ Pending | - | After E1 passes |
-| E7 | H5 | Attention pooling | ⏳ Pending | - | Requires code change |
+| E5 | H1 | encoder_num_layers: 2→4 | ⏳ Pending | - | Config change only |
+| E6 | H4 | puzzle_emb_len: 16→32 | ⏳ Pending | - | Config change only |
+| E7 | H5 | encoder_pooling_method=attention | ⏳ Pending | - | Config change only |
+| E8 | H1 | encoder_set_layers: 1→2 | ⏳ Pending | - | Deeper set encoding |
+| E9 | Stability | encoder_layer_scale_init=1e-4 | ⏳ Pending | - | CaiT-style stabilization |
+| E10 | Stability | encoder_norm_style=pre | ⏳ Pending | - | Pre-norm (more stable) |
+| E11 | H2 | encoder_lr_scale=0.1 | ⏳ Pending | - | Encoder 10x slower |
 
 ---
 
 ## 5. Implementation Checklist
 
-### Quick Fixes (Config Only)
+### All Options Now Config-Only! ✅
 
-- [ ] **E2**: Lower learning rate
-  ```yaml
-  lr: 3e-5  # Was 1e-4
-  ```
+All architecture and training improvements are now configurable via YAML:
 
-- [ ] **E5**: Increase encoder depth
-  ```yaml
-  encoder_num_layers: 4  # Was 2
-  ```
+**Training Config** (`config/cfg_pretrain_encoder_arc_agi_1.yaml`):
+```yaml
+lr: 3e-5                  # E2: Lower learning rate
+grad_clip_norm: 1.0       # E3: Gradient clipping
+encoder_lr_scale: 0.1     # E11: Encoder 10x slower
+```
 
-- [ ] **E6**: Increase output tokens
-  ```yaml
-  puzzle_emb_len: 32  # Was 16
-  ```
+**Architecture Config** (`config/arch/trm_encoder.yaml`):
+```yaml
+encoder_num_layers: 4           # E5: Deeper grid encoder
+puzzle_emb_len: 32              # E6: More output tokens
+encoder_pooling_method: attention  # E7: Attention pooling
+encoder_set_layers: 2           # E8: Deeper set encoder
+encoder_layer_scale_init: 1e-4  # E9: Layer scale
+encoder_norm_style: pre         # E10: Pre-norm (stable)
+```
 
-### Code Changes Required
+### Quick Command Examples
 
-- [ ] **E3**: Gradient clipping in `pretrain_encoder.py`
-  ```python
-  # After backward, before optimizer step
-  torch.nn.utils.clip_grad_norm_(train_state.model.parameters(), max_norm=1.0)
-  ```
+```bash
+# E1: Overfit test (MUST PASS FIRST)
+DISABLE_COMPILE=1 python pretrain_encoder.py \
+    --config-name cfg_pretrain_encoder_arc_agi_1 \
+    epochs=1000 max_train_puzzles=10 global_batch_size=10 \
+    eval_interval=100 +run_name="E1_overfit"
 
-- [ ] **E7**: Attention pooling in `DemoGridEncoder`
-  - Replace mean pool with learned query + cross-attention
-  - More complex, defer until simple fixes tried
+# E4: Lower LR + grad clip
+DISABLE_COMPILE=1 python pretrain_encoder.py \
+    --config-name cfg_pretrain_encoder_arc_agi_1 \
+    lr=3e-5 grad_clip_norm=1.0 +run_name="E4_lr_clip"
 
-- [ ] **Separate LRs**: Different optimizer for encoder
-  - Requires modifying `create_model_encoder()`
-  - Medium complexity
+# E7: Attention pooling
+DISABLE_COMPILE=1 python pretrain_encoder.py \
+    --config-name cfg_pretrain_encoder_arc_agi_1 \
+    arch.encoder_pooling_method=attention +run_name="E7_attn_pool"
+
+# E11: Separate learning rates
+DISABLE_COMPILE=1 python pretrain_encoder.py \
+    --config-name cfg_pretrain_encoder_arc_agi_1 \
+    encoder_lr_scale=0.1 +run_name="E11_sep_lr"
+
+# Combined: Best practices
+DISABLE_COMPILE=1 python pretrain_encoder.py \
+    --config-name cfg_pretrain_encoder_arc_agi_1 \
+    lr=3e-5 grad_clip_norm=1.0 \
+    arch.encoder_num_layers=4 \
+    arch.encoder_pooling_method=attention \
+    arch.encoder_set_layers=2 \
+    arch.encoder_layer_scale_init=1e-4 \
+    arch.encoder_norm_style=pre \
+    +run_name="E_combined"
+```
 
 ---
 

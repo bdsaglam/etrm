@@ -16,6 +16,7 @@ arch:
 # Data path - use encoder-mode preprocessed data
 data_paths: ["data/arc1concept-encoder-aug-1000"]
 data_paths_test: []
+max_train_puzzles: null
 
 evaluators:
   - name: arc@ARC
@@ -42,6 +43,13 @@ beta1: 0.9
 beta2: 0.95
 weight_decay: 0.1
 
+# Gradient clipping (0 = disabled)
+grad_clip_norm: 0.0
+
+# Separate encoder learning rate (multiplier)
+# 0 = disabled (single optimizer), 0.1 = encoder 10x slower
+encoder_lr_scale: 0.0
+
 # NO puzzle_emb_lr - single optimizer for encoder mode
 
 seed: 0
@@ -52,4 +60,3 @@ ema_rate: 0.999
 
 # Not used in encoder mode, kept for compatibility
 freeze_weights: False
-max_train_puzzles: null
