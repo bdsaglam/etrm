@@ -90,6 +90,12 @@ class ACTLossHead(nn.Module):
             "lm_loss": lm_loss.detach(),
             "q_halt_loss": q_halt_loss.detach(),
         })
+
+        # Pass through encoder diagnostics (scalar values from encoder)
+        for key in list(outputs.keys()):
+            if key.startswith("encoder_"):
+                metrics[key] = outputs[key]
+
         # Q continue (bootstrapping target loss); Alexia: This fits Q-learning, but seems totally unecessary
         q_continue_loss = 0
         if "target_q_continue" in outputs:

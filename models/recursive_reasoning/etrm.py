@@ -384,6 +384,9 @@ class TRMWithEncoder(nn.Module):
             if k in batch
         }
 
+        # Track encoder diagnostics
+        encoder_diagnostics = {}
+
         # Compute context for samples that need reset
         if needs_reset.any():
             # Encode demos for reset samples
@@ -392,6 +395,19 @@ class TRMWithEncoder(nn.Module):
                 new_current_data["demo_labels"],
                 new_current_data["demo_mask"],
             )
+
+            # Compute encoder diagnostics (detached, no grad impact)
+            with torch.no_grad():
+                encoder_diagnostics["encoder_output_mean"] = new_context.mean().item()
+                encoder_diagnostics["encoder_output_std"] = new_context.std().item()
+                encoder_diagnostics["encoder_output_norm"] = new_context.norm(dim=-1).mean().item()
+                # Cross-sample variance: how different are encodings across batch items?
+                # If this goes to 0, encoder is collapsing
+                batch_mean = new_context.mean(dim=0, keepdim=True)  # (1, T, D)
+                cross_sample_var = ((new_context - batch_mean) ** 2).mean()
+                encoder_diagnostics["encoder_cross_sample_var"] = cross_sample_var.item()
+                # Per-token variance across batch
+                encoder_diagnostics["encoder_token_std"] = new_context.std(dim=0).mean().item()
 
             # For continuing samples, use cached context
             if carry.cached_context is not None and not needs_reset.all():
@@ -418,6 +434,7 @@ class TRMWithEncoder(nn.Module):
             "logits": logits,
             "q_halt_logits": q_halt_logits,
             "q_continue_logits": q_continue_logits,
+            **encoder_diagnostics,  # Include encoder diagnostics
         }
 
         with torch.no_grad():
