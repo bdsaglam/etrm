@@ -16,7 +16,8 @@ arch:
 # Data path - use encoder-mode preprocessed data
 data_paths: ["data/arc1concept-encoder-aug-1000"]
 data_paths_test: []
-max_train_puzzles: null
+max_train_groups: null
+max_eval_groups: null
 
 evaluators:
   - name: arc@ARC

@@ -10,6 +10,8 @@ hydra:
 # Data path - use encoder-mode preprocessed data
 data_paths: ['data/arc1concept-encoder-aug-1000']
 data_paths_test: []
+max_train_groups: null
+max_eval_groups: null
 
 evaluators:
   - name: arc@ARC
@@ -46,4 +48,3 @@ ema_rate: 0.999
 
 # Not used in encoder mode, kept for compatibility
 freeze_weights: False
-max_train_puzzles: null

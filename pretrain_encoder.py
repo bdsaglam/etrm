@@ -106,7 +106,8 @@ class PretrainEncoderConfig(pydantic.BaseModel):
     ema_rate: float = 0.999
     freeze_weights: bool = False  # Kept for compatibility, not used
 
-    max_train_puzzles: Optional[int] = None
+    max_train_groups: Optional[int] = None  # Limit training to first N original puzzles (groups)
+    max_eval_groups: Optional[int] = None  # Limit eval to first N original puzzles (groups)
 
     # Prediction visualization logging
     log_predictions_every: Optional[int] = None
@@ -731,7 +732,7 @@ def launch(hydra_config: DictConfig):
         test_set_mode=False,
         epochs_per_iter=train_epochs_per_iter,
         global_batch_size=config.global_batch_size,
-        max_puzzles=config.max_train_puzzles,
+        max_groups=config.max_train_groups,
         rank=RANK,
         world_size=WORLD_SIZE,
     )
@@ -742,6 +743,7 @@ def launch(hydra_config: DictConfig):
             test_set_mode=True,
             epochs_per_iter=1,
             global_batch_size=config.global_batch_size,
+            max_groups=config.max_eval_groups,
             rank=RANK,
             world_size=WORLD_SIZE,
         )

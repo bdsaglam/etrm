@@ -18,7 +18,6 @@ def _sample_batch(
     group_indices: np.ndarray,
     start_index: int,
     global_batch_size: int,
-    max_puzzles: Optional[int] = None,
 ):
     # Pack examples into a full batch
     batch = []
@@ -29,16 +28,8 @@ def _sample_batch(
         # Pick a group and a puzzle from that group
         group_id = group_order[start_index]
 
-        # Cap puzzle range if max_puzzles is set
         puzzle_low = group_indices[group_id]
         puzzle_high = group_indices[group_id + 1]
-        if max_puzzles is not None:
-            puzzle_high = min(puzzle_high, max_puzzles)
-
-        # Skip this group if no valid puzzles
-        if puzzle_low >= puzzle_high:
-            start_index += 1
-            continue
 
         puzzle_id = rng.integers(puzzle_low, puzzle_high)
         start_index += 1
@@ -66,7 +57,7 @@ class PuzzleDatasetConfig(pydantic.BaseModel):
     epochs_per_iter: int  # Batch X epochs in an iteration to reduce overhead.
     rank: int
     num_replicas: int
-    max_puzzles: Optional[int] = None  # Limit to first N puzzles (works for any split)
+    max_groups: Optional[int] = None  # Limit to first N original puzzles (groups)
 
 
 class PuzzleDataset(IterableDataset):
@@ -236,16 +227,11 @@ class PuzzleDataset(IterableDataset):
             # Randomly shuffle groups
             rng = np.random.Generator(np.random.Philox(seed=self.config.seed + self._iters))
 
-            # Filter groups if max_puzzles is set
+            # Filter groups if max_groups is set
             num_groups = dataset["group_indices"].size - 1
-            if self.config.max_puzzles is not None:
-                # Only include groups that have at least one puzzle within the limit
-                valid_groups = np.where(dataset["group_indices"][:-1] < self.config.max_puzzles)[0]
-                group_order = np.concatenate(
-                    [rng.permutation(valid_groups) for _i in range(self.config.epochs_per_iter)]
-                )
-            else:
-                group_order = np.concatenate([rng.permutation(num_groups) for _i in range(self.config.epochs_per_iter)])
+            if self.config.max_groups is not None:
+                num_groups = min(self.config.max_groups, num_groups)
+            group_order = np.concatenate([rng.permutation(num_groups) for _i in range(self.config.epochs_per_iter)])
             start_index = 0
 
             while start_index < group_order.size:
@@ -256,7 +242,6 @@ class PuzzleDataset(IterableDataset):
                     group_indices=dataset["group_indices"],
                     start_index=start_index,
                     global_batch_size=self.config.global_batch_size,
-                    max_puzzles=self.config.max_puzzles,
                 )
 
                 # Select current rank and collate

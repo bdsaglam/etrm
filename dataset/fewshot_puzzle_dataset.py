@@ -28,7 +28,7 @@ class FewShotPuzzleDatasetConfig(pydantic.BaseModel):
     epochs_per_iter: int
     rank: int
     num_replicas: int
-    max_puzzles: Optional[int] = None
+    max_groups: Optional[int] = None  # Limit to first N original puzzles (groups)
     max_demos: int = 10  # Maximum demos to include per batch item
 
 
@@ -230,6 +230,11 @@ class FewShotPuzzleDataset(IterableDataset):
         for set_name, dataset in self._data.items():
             num_puzzles = len(dataset["puzzle_identifiers"])
 
+            # Limit by groups if max_groups is set
+            if self.config.max_groups is not None:
+                num_groups = min(self.config.max_groups, dataset["group_indices"].size - 1)
+                num_puzzles = int(dataset["group_indices"][num_groups])
+
             # Iterate through puzzles in batches
             puzzle_idx = 0
             while puzzle_idx < num_puzzles:
@@ -307,17 +312,13 @@ class FewShotPuzzleDataset(IterableDataset):
             # Randomly shuffle groups
             rng = np.random.Generator(np.random.Philox(seed=self.config.seed + self._iters))
 
-            # Filter groups if max_puzzles is set
+            # Filter groups if max_groups is set
             num_groups = dataset["group_indices"].size - 1
-            if self.config.max_puzzles is not None:
-                valid_groups = np.where(dataset["group_indices"][:-1] < self.config.max_puzzles)[0]
-                group_order = np.concatenate(
-                    [rng.permutation(valid_groups) for _i in range(self.config.epochs_per_iter)]
-                )
-            else:
-                group_order = np.concatenate(
-                    [rng.permutation(num_groups) for _i in range(self.config.epochs_per_iter)]
-                )
+            if self.config.max_groups is not None:
+                num_groups = min(self.config.max_groups, num_groups)
+            group_order = np.concatenate(
+                [rng.permutation(num_groups) for _i in range(self.config.epochs_per_iter)]
+            )
 
             group_idx = 0
             while group_idx < len(group_order):
@@ -330,12 +331,6 @@ class FewShotPuzzleDataset(IterableDataset):
                     # Get puzzle range for this group
                     puzzle_low = dataset["group_indices"][group_id]
                     puzzle_high = dataset["group_indices"][group_id + 1]
-                    if self.config.max_puzzles is not None:
-                        puzzle_high = min(puzzle_high, self.config.max_puzzles)
-
-                    if puzzle_low >= puzzle_high:
-                        group_idx += 1
-                        continue
 
                     # Random puzzle from group
                     puzzle_id = rng.integers(puzzle_low, puzzle_high)

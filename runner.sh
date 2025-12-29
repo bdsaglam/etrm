@@ -1,7 +1,7 @@
 #!/bin/bash
 # LICENSE: https://maximerobeyns.com/fragments/job_queue
 
-JOBS_FILE="jobs.txt"
+JOBS_FILE=${1:-jobs.txt}
 
 while true; do
     # Find the line number of the first un-executed job

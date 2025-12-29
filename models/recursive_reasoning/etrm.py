@@ -103,6 +103,9 @@ class TRMEncoderConfig(BaseModel):
     puzzle_emb_len: int = 16  # Context sequence length (from encoder)
     no_ACT_continue: bool = True
 
+    # Diagnostic settings
+    freeze_encoder: bool = False  # Freeze encoder weights (for diagnostic experiments)
+
     # Not used but kept for config compatibility
     num_puzzle_identifiers: int = 1
     puzzle_emb_ndim: int = 0  # Always 0 for encoder mode
@@ -357,6 +360,11 @@ class TRMWithEncoder(nn.Module):
             qk_norm=self.config.encoder_qk_norm,
         )
         self.encoder = StandardDemoEncoder(encoder_config)
+
+        # Freeze encoder if requested (for diagnostic experiments)
+        if self.config.freeze_encoder:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
 
         # Create TRM inner model
         self.inner = TRMEncoderInner(self.config)
