@@ -28,6 +28,8 @@ from models.encoders.standard import StandardDemoEncoder
 from models.encoders.variational import VariationalDemoEncoder
 from models.encoders.lpn_standard import LPNStandardEncoder
 from models.encoders.lpn_variational import LPNVariationalEncoder, LPNVariationalEncoderV2
+from models.encoders.hybrid_variational import HybridVariationalEncoder
+from models.encoders.hybrid_standard import HybridStandardEncoder
 
 __all__ = [
     # Base and factory
@@ -43,4 +45,7 @@ __all__ = [
     "LPNStandardEncoder",
     "LPNVariationalEncoder",
     "LPNVariationalEncoderV2",
+    # Hybrid architecture
+    "HybridStandardEncoder",
+    "HybridVariationalEncoder",
 ]

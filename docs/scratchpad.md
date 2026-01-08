@@ -54,3 +54,13 @@ epochs=1000 \
 eval_interval=100 \
 +project_name="mmi-714" \
 +run_name="encoder_trm_v1"
+
+
+# Pretrained decoder checkpoints
+
+https://wandb.ai/bdsaglam/Arc1concept-aug-1000-ACT-torch/runs/2jpjeuav?nw=nwuserbdsaglam
+/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071
+
+
+https://wandb.ai/bdsaglam/trm_ablations_arcagi1/runs/vk8dh9xe?nw=nwuserbdsaglam
+/home/baris/repos/TinyRecursiveModels/checkpoints/trm_ablations_arcagi1/arcagi1_supervision_4/step_25900

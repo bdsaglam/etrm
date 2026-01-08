@@ -99,6 +99,14 @@ class PretrainEncoderConfig(pydantic.BaseModel):
     load_checkpoint: Optional[str] = None
     checkpoint_path: Optional[str] = None
 
+    # Pretrained decoder initialization (transfer learning)
+    # Path to original TRM checkpoint - loads inner model weights, skips puzzle_emb
+    load_pretrained_decoder: Optional[str] = None
+
+    # Decoder freezing for staged training (train encoder only first)
+    # 0 = disabled (train full model from start)
+    freeze_decoder_steps: int = 0
+
     # Extras
     seed: int = 0
     checkpoint_every_eval: bool = False
@@ -189,9 +197,15 @@ def create_model_encoder(
         if "DISABLE_COMPILE" not in os.environ:
             model = torch.compile(model)  # type: ignore
 
-        # Load checkpoint
+        # Load weights
         if rank == 0:
-            load_checkpoint_encoder(model, config)
+            # First: load pretrained decoder if specified (transfer learning)
+            if config.load_pretrained_decoder is not None:
+                load_pretrained_decoder(model, config.load_pretrained_decoder, rank=rank)
+
+            # Second: load full checkpoint if specified (overrides pretrained decoder)
+            if config.load_checkpoint is not None:
+                load_checkpoint_encoder(model, config)
 
         # Broadcast parameters from rank 0
         if world_size > 1:
@@ -218,6 +232,8 @@ def create_model_encoder(
             print(f"  Inner LR: {config.lr:.2e}")
             if config.encoder_freeze_steps > 0:
                 print(f"  STAGED TRAINING: Encoder frozen for first {config.encoder_freeze_steps} steps")
+            if config.freeze_decoder_steps > 0:
+                print(f"  STAGED TRAINING: Decoder frozen for first {config.freeze_decoder_steps} steps")
 
         optimizers = [
             AdamATan2(
@@ -256,6 +272,77 @@ def load_checkpoint_encoder(model: nn.Module, config: PretrainEncoderConfig):
         state_dict = torch.load(config.load_checkpoint, map_location="cuda")
         # No puzzle_emb handling needed for encoder mode
         model.load_state_dict(state_dict, assign=True)
+
+
+def load_pretrained_decoder(model: nn.Module, checkpoint_path: str, rank: int = 0):
+    """Load pretrained TRM decoder weights into TRMWithEncoder.inner.
+
+    Transfers all compatible weights from original TRM checkpoint:
+    - embed_tokens, lm_head, q_head
+    - L_level (all transformer blocks)
+    - H_init, L_init buffers
+    - rotary_emb or embed_pos
+
+    Skips:
+    - puzzle_emb.* (doesn't exist in encoder mode)
+
+    Missing (expected):
+    - encoder.* (only in TRMWithEncoder, initialized randomly)
+    """
+    if rank == 0:
+        print(f"\n{'='*60}")
+        print(f"Loading pretrained decoder from: {checkpoint_path}")
+        print(f"{'='*60}")
+
+    state_dict = torch.load(checkpoint_path, map_location="cuda", weights_only=True)
+
+    # Filter out puzzle_emb (incompatible with encoder mode)
+    filtered = {}
+    skipped = []
+    for k, v in state_dict.items():
+        if "puzzle_emb" in k:
+            skipped.append(k)
+        else:
+            filtered[k] = v
+
+    if rank == 0:
+        print(f"Skipped {len(skipped)} puzzle_emb keys")
+        print(f"Loading {len(filtered)} keys into model")
+
+    # strict=False: encoder.* keys won't exist in original checkpoint
+    result = model.load_state_dict(filtered, strict=False, assign=True)
+
+    if rank == 0:
+        # Verify inner model keys are loaded
+        inner_missing = [k for k in result.missing_keys if ".inner." in k]
+        encoder_missing = [k for k in result.missing_keys if ".encoder." in k]
+
+        if inner_missing:
+            print(f"WARNING: Inner model keys not loaded: {inner_missing}")
+        else:
+            print(f"All inner model (decoder) keys loaded successfully")
+
+        print(f"Encoder keys (expected missing): {len(encoder_missing)}")
+        print(f"{'='*60}\n")
+
+
+def set_decoder_frozen(model: nn.Module, frozen: bool) -> int:
+    """Freeze or unfreeze decoder (inner model) parameters.
+
+    Args:
+        model: TRMWithEncoder model (possibly compiled)
+        frozen: True to freeze, False to unfreeze
+
+    Returns:
+        Number of parameters affected
+    """
+    count = 0
+    for name, param in model.named_parameters():
+        # Decoder = inner model parameters (not encoder)
+        if ".inner." in name:
+            param.requires_grad = not frozen
+            count += 1
+    return count
 
 
 def cosine_schedule_with_warmup_lr_lambda(
@@ -405,10 +492,14 @@ def train_batch_encoder(
     # Get number of ACT steps from config
     num_act_steps = config.arch.num_act_steps
 
-    # Staged training: check freeze period
-    in_freeze_period = (
+    # Staged training: check freeze periods
+    encoder_freeze_period = (
         config.encoder_freeze_steps > 0
         and train_state.step <= config.encoder_freeze_steps
+    )
+    decoder_freeze_period = (
+        config.freeze_decoder_steps > 0
+        and train_state.step <= config.freeze_decoder_steps
     )
 
     # Log when encoder unfreezes
@@ -419,6 +510,28 @@ def train_batch_encoder(
         print(f"ENCODER UNFROZEN at step {train_state.step}")
         print(f"Encoder LR scale: {config.encoder_lr_scale}")
         print(f"{'='*60}\n")
+
+    # Freeze decoder on first step of freeze period
+    if (config.freeze_decoder_steps > 0
+        and train_state.step == 1):
+        count = set_decoder_frozen(train_state.model, frozen=True)
+        if rank == 0:
+            print(f"\n{'='*60}")
+            print(f"DECODER FROZEN for first {config.freeze_decoder_steps} steps")
+            print(f"  Frozen {count} decoder parameters (requires_grad=False)")
+            print(f"  Only encoder will be trained")
+            print(f"{'='*60}\n")
+
+    # Unfreeze decoder when freeze period ends
+    if (config.freeze_decoder_steps > 0
+        and train_state.step == config.freeze_decoder_steps + 1):
+        count = set_decoder_frozen(train_state.model, frozen=False)
+        if rank == 0:
+            print(f"\n{'='*60}")
+            print(f"DECODER UNFROZEN at step {train_state.step}")
+            print(f"  Unfrozen {count} decoder parameters (requires_grad=True)")
+            print(f"  Full model training begins")
+            print(f"{'='*60}\n")
 
     # Online learning: forward + backward + optim.step() per ACT step
     carry = None  # Fresh start each batch
@@ -456,10 +569,16 @@ def train_batch_encoder(
         for optim_idx, (optim, base_lr) in enumerate(zip(train_state.optimizers, train_state.optimizer_lrs)):
             is_encoder_optim = (optim_idx == 1 and len(train_state.optimizers) > 1)
 
-            # Skip encoder optimizer during freeze period
-            if is_encoder_optim and in_freeze_period:
+            # Skip encoder optimizer during encoder freeze period
+            if is_encoder_optim and encoder_freeze_period:
                 optim.zero_grad()
                 encoder_lr_this_step = 0.0
+                continue
+
+            # Skip decoder optimizer during decoder freeze period
+            if not is_encoder_optim and decoder_freeze_period:
+                optim.zero_grad()
+                lr_this_step = 0.0
                 continue
 
             lr = compute_lr(base_lr, config, train_state)
@@ -514,6 +633,7 @@ def train_batch_encoder(
 
             reduced_metrics["train/lr"] = lr_this_step
             reduced_metrics["train/num_act_steps"] = num_act_steps
+            reduced_metrics["train/decoder_frozen"] = 1.0 if lr_this_step == 0 else 0.0
             if encoder_lr_this_step is not None:
                 reduced_metrics["train/encoder_lr"] = encoder_lr_this_step
                 reduced_metrics["train/encoder_frozen"] = 1.0 if encoder_lr_this_step == 0 else 0.0

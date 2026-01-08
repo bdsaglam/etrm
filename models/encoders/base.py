@@ -236,6 +236,8 @@ def create_encoder(config: DemoEncoderConfig) -> BaseDemoEncoder:
     from models.encoders.variational import VariationalDemoEncoder
     from models.encoders.lpn_standard import LPNStandardEncoder
     from models.encoders.lpn_variational import LPNVariationalEncoder, LPNVariationalEncoderV2
+    from models.encoders.hybrid_variational import HybridVariationalEncoder
+    from models.encoders.hybrid_standard import HybridStandardEncoder
 
     encoder_map = {
         "standard": StandardDemoEncoder,
@@ -243,6 +245,8 @@ def create_encoder(config: DemoEncoderConfig) -> BaseDemoEncoder:
         "lpn_standard": LPNStandardEncoder,
         "lpn_variational": LPNVariationalEncoder,
         "lpn_variational_v2": LPNVariationalEncoderV2,
+        "hybrid_standard": HybridStandardEncoder,
+        "hybrid_variational": HybridVariationalEncoder,
     }
 
     encoder_type = config.encoder_type.lower()

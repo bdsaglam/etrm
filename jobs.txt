@@ -38,10 +38,27 @@
 # ============================================================================
 
 # G2: LPN Variational encoder - full training
-[-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 arch.encoder_type=lpn_variational arch.num_act_steps=8 eval_interval=10000 +project_name="mmi-714-debug" +run_name="G2_lpn_var_full" [1454306]
+[!] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 max_eval_groups=32 arch.encoder_type=lpn_variational arch.num_act_steps=4 eval_interval=10000 +project_name="mmi-714-debug" +run_name="G2_lpn_var_full" 
 
 # G3: LPN Standard encoder - full training
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 arch.encoder_type=lpn_standard arch.num_act_steps=8 eval_interval=1000 +project_name="mmi-714-debug" +run_name="G3_lpn_std_full" [1452945]
+[-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 max_eval_groups=32 arch.encoder_type=lpn_standard arch.num_act_steps=4 epochs=10000 eval_interval=1000 +project_name="mmi-714-debug" +run_name="G3_lpn_std_full"  [1549095]
 
 # G1: Standard encoder - full training baseline
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 arch.num_act_steps=8 eval_interval=1000 +project_name="mmi-714-debug" +run_name="G1_standard_full"
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 max_eval_groups=32  arch.num_act_steps=4 epochs=10000 eval_interval=1000 +project_name="mmi-714-debug" +run_name="G1_standard_full"
+
+# ============================================================================
+# TRANSFER LEARNING EXPERIMENTS
+# Goal: Speed up training by initializing with pretrained TRM decoder
+# Strategy: Load pretrained inner model weights, train encoder to produce
+#           compatible context vectors
+# Pretrained checkpoint: TRM with 45% ARC-AGI-1 accuracy
+# ============================================================================
+
+# T1: Pretrained decoder + full training (standard encoder)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 load_pretrained_decoder=/home/baris/repos/TinyRecursiveModels/checkpoints/trm_ablations_arcagi1/arcagi1_supervision_4/step_25900 arch.num_act_steps=4 eval_interval=5000 +project_name="mmi-714-debug" +run_name="T1_pretrained_standard"
+
+# T2: Pretrained decoder + staged training (encoder-only first 5k steps)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 load_pretrained_decoder=/home/baris/repos/TinyRecursiveModels/checkpoints/trm_ablations_arcagi1/arcagi1_supervision_4/step_25900 freeze_decoder_steps=5000 arch.num_act_steps=4 eval_interval=5000 +project_name="mmi-714-debug" +run_name="T2_pretrained_staged"
+
+# T3: Pretrained decoder + LPN variational encoder
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder.py --config-name cfg_pretrain_encoder_arc_agi_1 load_pretrained_decoder=/home/baris/repos/TinyRecursiveModels/checkpoints/trm_ablations_arcagi1/arcagi1_supervision_4/step_25900 arch.encoder_type=lpn_variational arch.num_act_steps=4 eval_interval=5000 +project_name="mmi-714-debug" +run_name="T3_pretrained_lpn_var"

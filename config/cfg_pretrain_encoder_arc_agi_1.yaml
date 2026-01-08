@@ -52,6 +52,14 @@ grad_clip_norm: 1.0
 # 0 = disabled (single optimizer), 0.1 = encoder 10x slower
 encoder_lr_scale: 0.0
 
+# Transfer learning: load pretrained TRM decoder weights
+# null = disabled, path = load from checkpoint (skips puzzle_emb)
+load_pretrained_decoder: null
+
+# Staged training: freeze decoder for first N steps (train encoder only)
+# 0 = disabled (train full model from start)
+freeze_decoder_steps: 0
+
 # NO puzzle_emb_lr - single optimizer for encoder mode
 
 seed: 0

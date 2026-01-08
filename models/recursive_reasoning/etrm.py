@@ -36,6 +36,8 @@ from models.layers import (
 from models.encoders import StandardDemoEncoder, DemoEncoderConfig
 from models.encoders.lpn_standard import LPNStandardEncoder
 from models.encoders.lpn_variational import LPNVariationalEncoder
+from models.encoders.hybrid_variational import HybridVariationalEncoder
+from models.encoders.hybrid_standard import HybridStandardEncoder
 
 
 IGNORE_LABEL_ID = -100
@@ -370,6 +372,10 @@ class TRMWithEncoder(nn.Module):
             self.encoder = LPNStandardEncoder(encoder_config)
         elif self.config.encoder_type == "lpn_variational":
             self.encoder = LPNVariationalEncoder(encoder_config)
+        elif self.config.encoder_type == "hybrid_standard":
+            self.encoder = HybridStandardEncoder(encoder_config)
+        elif self.config.encoder_type == "hybrid_variational":
+            self.encoder = HybridVariationalEncoder(encoder_config)
         else:
             raise ValueError(f"Unknown encoder_type: {self.config.encoder_type}")
 
