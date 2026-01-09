@@ -1,23 +1,33 @@
-# Training Modes Comparison: TRM Variants
+# Training Approaches Comparison: TRM and ETRM
 
-This document compares four different training approaches for the Tiny Recursive Reasoning Model (TRM).
+This document compares different training approaches for the Tiny Recursive Reasoning Model (TRM) and our encoder-based extension (ETRM).
+
+---
+
+## Terminology
+
+- **TRM**: Original paper approach with learned puzzle embeddings and Adaptive Computation Time (ACT)
+- **ETRM**: Our research contribution - encoder-based TRM with dynamic halting (Encoder-based TRM)
+- **ETRM-FCT**: Explored variant with fixed computation time instead of dynamic halting (deprecated for this project)
 
 ---
 
 ## Overview
 
-| Approach | Puzzle Representation | ACT Mode | Encoder Gradients | Training Script |
-|----------|---------------------|----------|-------------------|-----------------|
-| **Original TRM** | Learned embeddings | Dynamic (carry persists) | N/A | `pretrain.py` |
-| **Online TRM** | Encoder | Fixed steps | Full (every batch) | `pretrain_encoder.py` |
-| **ACT TRM (cached)** | Encoder | Dynamic (carry persists) | Sparse (only resets) | `pretrain_encoder_original.py` (old) |
-| **ACT TRM (re-encode)** ✨ | Encoder | Dynamic (carry persists) | Full (every step) | `pretrain_encoder_original.py` (new) |
+| Approach | Puzzle Representation | Halting | Encoder Gradients | Training Script | Status |
+|----------|---------------------|----------|-------------------|-----------------|--------|
+| **TRM** | Learned embeddings | Dynamic (ACT) | N/A | `pretrain.py` | ✅ Baseline |
+| **ETRM-FCT** | Encoder | Fixed steps | Full (every step) | `pretrain_encoder.py` | ⚠️ Works but not continuing |
+| **ETRM (cached)** | Encoder | Dynamic (ACT) | Sparse (~2%) | (deprecated) | ❌ Gradient starvation |
+| **ETRM** ✨ | Encoder | Dynamic (ACT) | Full (every step) | `pretrain_encoder_original.py` | ✅ Main approach |
 
 ---
 
-## Approach 1: Original TRM with Embeddings and ACT
+## TRM: Original Paper Approach with Learned Embeddings
 
 **Paper**: "Less is More: Recursive Reasoning with Tiny Networks"
+
+**What it is**: The baseline approach from the paper using learned puzzle embeddings and Adaptive Computation Time (ACT).
 
 ### How It Works
 
@@ -159,7 +169,11 @@ The model sees the *outcome* of refinement (better predictions over time) and le
 
 ---
 
-## Approach 2: Online TRM with Encoder (Our Implementation)
+## ETRM-FCT: Encoder-based TRM with Fixed Computation Time
+
+**Status**: ⚠️ Works (96.7% train accuracy) but not continuing with this variant for the project
+
+**What it is**: TRM with encoder replacing embeddings, but using **fixed number of steps** instead of dynamic halting.
 
 **Goal**: Replace learned embeddings with encoder that extracts patterns from demos.
 
@@ -176,34 +190,36 @@ demos_mask = [[True, True, True]]
 context = encoder(demos_input, demos_output, demos_mask)  # (batch, 16, 512)
 ```
 
-### Training Loop (Key Difference: Multiple Forwards per Batch)
+### Training Loop (Key Difference: Fixed Steps, All Samples Synchronized)
 
 ```python
-# Carry RESET each batch (doesn't persist)
+# Carry resets each batch because all samples finish together
 carry = None
 
 for batch in dataloader:
-    # Fixed number of ACT steps per batch
-    for act_step in range(num_act_steps):  # e.g., 4, 8, 16
+    # Fixed number of steps - all samples do same number
+    for step in range(num_steps):  # e.g., 4, 8, 16
 
-        # ENCODE DEMOS FRESH (not cached!)
+        # ENCODE DEMOS FRESH
         context = encoder(
             batch["demo_inputs"],
             batch["demo_labels"],
             batch["demo_mask"],
         )
 
-        # Forward inner model (one ACT step)
+        # Forward inner model (one step)
         carry, loss, outputs = model(carry, batch, context)
 
-        # Backward + optimizer step (AFTER EACH ACT STEP!)
+        # Backward + optimizer step (after each step)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
 
-    # Reset carry for next batch
+    # All samples finished (did N steps) → reset carry for next batch
     carry = None
 ```
+
+**Key insight**: Carry resets because all samples finish together (synchronized), not because of a design choice to reset.
 
 ### Forward Pass (Fixed Steps, No Halting)
 
@@ -229,16 +245,17 @@ def forward(carry, batch, context):
 ### Batch Timeline Example
 
 ```
-Batch 1 (4 ACT steps):
-  Step 1: context = encoder(demos) → forward → loss_1 → backward → optim.step()
-  Step 2: context = encoder(demos) → forward → loss_2 → backward → optim.step()
-  Step 3: context = encoder(demos) → forward → loss_3 → backward → optim.step()
-  Step 4: context = encoder(demos) → forward → loss_4 → backward → optim.step()
+Batch 1 (all 256 samples, 4 fixed steps):
+  Step 1: encoder(256 demos) → forward → loss_1 → backward → optim.step()
+  Step 2: encoder(256 demos) → forward → loss_2 → backward → optim.step()
+  Step 3: encoder(256 demos) → forward → loss_3 → backward → optim.step()
+  Step 4: encoder(256 demos) → forward → loss_4 → backward → optim.step()
+  → All 256 samples finished (did 4 steps)
 
-Batch 2 (4 ACT steps, NEW samples):
-  carry = None (reset!)
-  Step 1: context = encoder(demos) → forward → loss_5 → backward → optim.step()
-  Step 2: context = encoder(demos) → forward → loss_6 → backward → optim.step()
+Batch 2 (NEW 256 samples, 4 fixed steps):
+  carry = None (all previous samples finished)
+  Step 1: encoder(256 demos) → forward → loss_5 → backward → optim.step()
+  Step 2: encoder(256 demos) → forward → loss_6 → backward → optim.step()
   ...
 ```
 
@@ -267,31 +284,36 @@ ACT Step 2:
 
 ### Pros
 
-✅ **Full encoder gradients**: Encoder sees gradients from 100% of samples, every ACT step
-✅ **Online learning**: Later ACT steps benefit from earlier weight updates
-✅ **Simple training loop**: No complex carry management
+✅ **Full encoder gradients**: Encoder sees gradients from 100% of samples, every step
+✅ **Frequent updates**: Encoder updated N times per batch (weights improve between steps)
+✅ **Simple training loop**: No complex carry management across batches
 ✅ **Works well**: Achieved 96.7% train accuracy on 32 groups
 ✅ **True few-shot**: Encoder learns from demos, not puzzle IDs
 
 ### Cons
 
-❌ **Expensive**: N× encoder forward passes per batch
-❌ **No dynamic halting**: All samples use same number of steps
-❌ **Inefficient**: Re-encodes demos every ACT step (could cache)
+❌ **Expensive**: N× encoder forward passes per batch (vs 1× in TRM/ETRM)
+❌ **No adaptive computation**: All samples use same number of steps (easy and hard alike)
+❌ **Wasteful for easy samples**: Easy puzzles forced to do N steps even if solved earlier
 ❌ **Different from paper**: Doesn't match original TRM training dynamics
 
-### Why It Works
+### Why We're Not Continuing With This
 
-- Encoder gets MASSIVE gradient signal (N× per sample)
-- Can learn useful representations despite architectural limitations
-- Online learning: Step 2 benefits from updated weights from Step 1
-- Simple and predictable training dynamics
+While ETRM-FCT works well (96.7% accuracy), it lacks the **adaptive computation** that makes TRM elegant:
+- TRM/ETRM: Easy samples halt early, hard samples get more steps
+- ETRM-FCT: All samples forced to use same N steps
+
+Our goal is to match the paper's dynamics while adding encoder-based generalization, so we focus on **ETRM** instead.
 
 ---
 
-## Approach 3: ACT TRM with Encoder (Our Failed Attempt)
+## ETRM with Context Caching (DEPRECATED - Gradient Starvation)
 
-**Goal**: Combine encoder with original TRM's dynamic ACT training.
+**Status**: ❌ **DEPRECATED** - Fundamental gradient starvation issue, cannot be fixed
+
+**What it was**: Failed attempt at ETRM using context caching (encode once when sample starts, cache for subsequent steps).
+
+**Why it failed**: Caching with detachment reduced encoder gradients to ~2%, causing poor learning (35-50% accuracy).
 
 ### How It Works
 
@@ -484,18 +506,23 @@ This is like trying to learn to ride a bike by only getting feedback 2% of the t
 
 ---
 
-## Approach 4: ACT TRM with Re-encoding (Best of Both Worlds) ✨
+## ETRM: Encoder-based TRM with Dynamic Halting ✨
 
-**Goal**: Combine encoder with dynamic ACT while maintaining full gradient signal.
+**Status**: ✅ **IMPLEMENTED** - This is our main research contribution (Jan 9, 2026)
+
+**What it is**: TRM with encoder replacing embeddings, maintaining full dynamic halting (ACT) from the original paper.
+
+**Goal**: Enable true few-shot learning while preserving TRM's adaptive computation dynamics.
 
 ### The Key Insight
 
-Instead of caching encoder output, **re-encode every step** (like online mode), but with **dynamic halting** (like ACT mode).
+**Re-encode the full batch every step** to provide dense encoder gradients while maintaining dynamic halting:
 
 This gives us:
-- Full encoder gradients (100% of batch every step)
-- Dynamic halting (samples stop when done)
-- More efficient than online mode (1 forward per batch vs N)
+- Full encoder gradients (100% of batch every step) ✅
+- Dynamic halting (samples stop when done) ✅
+- Adaptive computation (easy samples use fewer steps) ✅
+- Same training dynamics as original TRM ✅
 
 ### How It Works
 
@@ -509,25 +536,27 @@ context = encoder(
 # No .detach() - keep gradients!
 ```
 
-### Training Loop (Same as Approach 3)
+### Training Loop (Same as TRM - One Forward Per Batch)
 
 ```python
-# Initialize carry ONCE (persists across batches)
+# Initialize carry ONCE (persists across batches, just like TRM)
 if train_state.carry is None:
     train_state.carry = model.initial_carry(batch)
 
 for batch in dataloader:
-    # ONE forward per batch (carry persists)
+    # ONE forward per batch (carry persists, samples cycle in/out)
     train_state.carry, loss, outputs = model(
         carry=train_state.carry,
         batch=batch,
     )
 
-    # Backward + optimizer step
+    # ONE backward + optimizer step per batch (just like TRM)
     loss.backward()
     optimizer.step()
     optimizer.zero_grad()
 ```
+
+**Key**: Same training loop structure as TRM - the only difference is encoder replaces embedding lookup.
 
 ### Forward Pass (Re-encode Every Step)
 
@@ -578,26 +607,28 @@ def _forward_train_original(carry, batch):
     ), outputs
 ```
 
-### Batch Timeline Example
+### Batch Timeline Example (Same as TRM)
 
 ```
 Batch 1 (all 256 samples start):
-  context = encoder(256 demos)  ← All samples
+  encoder(256 demos) → context ← Replaces embedding lookup
   forward → 50 samples halt
   ✅ Encoder gets gradients from 256 samples
 
 Batch 2 (206 continuing + 50 new):
-  context = encoder(256 demos)  ← All samples (206 old + 50 new)
+  encoder(256 demos) → context ← Re-encode full batch
   forward → 30 more halt
   ✅ Encoder gets gradients from 256 samples
 
 Batch 3 (176 continuing + 80 new):
-  context = encoder(256 demos)  ← All samples
+  encoder(256 demos) → context ← Re-encode full batch
   forward → 25 more halt
   ✅ Encoder gets gradients from 256 samples
 
-... continues until all samples halt
+... continues with samples cycling in/out (just like TRM)
 ```
+
+**Note**: This is exactly how TRM works, except encoder replaces the embedding matrix lookup.
 
 ### Gradient Flow (Full Signal Every Step)
 
@@ -617,128 +648,123 @@ Next batch:
 ... every batch gives full gradients
 ```
 
-### Efficiency Analysis
+### Efficiency Comparison
 
-**Key comparison**: Sample needs K=8 steps to halt
+**How does ETRM compare to other approaches?**
 
-**Online mode (N=8 fixed steps)**:
-- Batches needed: 1
-- Encoder forwards in that batch: 8 × 256 = **2048**
-- Optimizer steps: 8
+| Metric | TRM | ETRM-FCT (N=8) | ETRM (avg ~8 steps) |
+|--------|-----|----------------|---------------------|
+| Puzzle representation | Embedding lookup | Encoder | Encoder |
+| Forwards per batch | 1 | 8 | 1 |
+| Batches to process 256 samples | ~8 (dynamic) | 1 (all synchronized) | ~8 (dynamic) |
+| Encoder/Embedding calls per sample | ~8 lookups | 8 forwards | ~8 forwards |
+| Compute distribution | Adaptive (ACT) | Uniform (fixed) | Adaptive (ACT) |
+| Throughput | ~32 samples/batch | 256 samples/batch | ~32 samples/batch |
 
-**ACT re-encode (K=8 dynamic steps)**:
-- Batches needed: 8 (one per step)
-- Encoder forwards across 8 batches: 8 × 256 = **2048**
-- Optimizer steps: 8
-
-**Wait, same number of encoder forwards?** Yes, but here's the key difference:
-
-In ACT mode, **batch composition changes**:
-- Easy samples halt early (use fewer than K steps)
-- Hard samples continue (use up to K steps)
-- Batch always has mix of new and continuing samples
-
-**Average case** (some samples halt early):
-
-**Online mode (N=8)**:
-```
-Batch 1: 256 samples × 8 ACT steps = 2048 encoder forwards
-         ALL samples do 8 steps (waste for easy samples)
-```
-
-**ACT re-encode (K=1 to 16, avg ~8)**:
-```
-Batch 1: 256 samples × 1 step = 256 encoder forwards (50 halt)
-Batch 2: 256 samples × 1 step = 256 encoder forwards (30 halt)
-Batch 3: 256 samples × 1 step = 256 encoder forwards (25 halt)
-...
-Batch 8: 256 samples × 1 step = 256 encoder forwards
-
-Total: ~8 batches × 256 = ~2048 encoder forwards
-BUT: Easy samples only did 1-3 forwards (saved compute)
-     Hard samples got up to 16 forwards (more compute where needed)
-```
-
-### Compute Comparison
-
-| Metric | Online (N=8) | ACT Re-encode (avg K=8) |
-|--------|--------------|------------------------|
-| Encoder forwards per batch | **2048** (256 × 8) | **256** (256 × 1) |
-| Batches to process 256 samples | 1 | ~8 |
-| Total encoder forwards | ~2048 | ~2048 |
-| Compute distribution | Uniform (all samples get 8) | Adaptive (easy: 1-3, hard: 8-16) |
-| Throughput | 256 samples/batch | ~32 samples/batch (256/8) |
-
-**Key advantage**: Adaptive compute allocation + full gradients
+**Key insights:**
+1. **ETRM matches TRM dynamics exactly** - same batches needed, same adaptive compute
+2. **ETRM-FCT is different** - higher throughput but no adaptiveness
+3. **Total encoder compute similar** - all approaches do ~8 encoder operations per sample, but distributed differently
 
 ### Pros
 
-✅ **Full encoder gradients**: 100% of batch, every step (fixes Approach 3)
-✅ **Dynamic halting**: Easy samples finish early, hard samples get more steps
-✅ **Matches original TRM dynamics**: Same training approach as paper
-✅ **Truncated BPTT**: Stable gradients (detach inner_carry)
-✅ **More efficient than online mode**: 1 encoder forward per batch vs N
-✅ **Adaptive compute**: Samples use what they need
-✅ **Should learn well**: Encoder gets proper gradient signal
+✅ **Matches TRM dynamics**: Preserves adaptive computation from original paper
+✅ **Full encoder gradients**: 100% of batch, every step (solves gradient starvation)
+✅ **True few-shot learning**: Encoder learns from demos, enables generalization to unseen puzzles
+✅ **Adaptive compute**: Easy samples use fewer steps, hard samples get more
+✅ **Truncated BPTT**: Stable gradients (detach carry between batches)
+✅ **Learning successfully**: Currently 86% train accuracy at step 240 (improving)
 
 ### Cons
 
-❌ **More expensive than caching**: K encoder calls vs 1 (but necessary!)
-❌ **Lower throughput**: ~8× batches needed vs online mode
-❌ **Similar total compute to online**: ~2048 encoder forwards either way
+❌ **Re-encoding cost**: Must encode full batch every step (256 encoder forwards per batch)
+❌ **Similar total compute to ETRM-FCT**: Both do ~8 encoder operations per sample
+❌ **Lower throughput than ETRM-FCT**: ~32 samples/batch vs 256 samples/batch
 
-**But the tradeoff is worth it**: We get dynamic halting + full gradients
+**But this is the right tradeoff**: We get TRM's adaptive computation + encoder-based generalization
 
-### Why This Should Work
+### Why This Works
 
-1. **Encoder gets full gradient signal**: Every batch, 100% of samples contribute
-2. **Can learn useful representations**: Dense gradient signal enables learning
-3. **Dynamic halting benefits**: Q-head learns when to stop
-4. **Adaptive compute**: Easy puzzles use fewer steps (1-3), hard puzzles use more (8-16)
-5. **Best of both worlds**: Efficiency of ACT + gradient density of online mode
+1. **Encoder gets full gradient signal**: Every batch, 100% of samples contribute (not just ~2%)
+2. **Matches proven TRM dynamics**: Same training approach that achieved 45% on ARC-AGI
+3. **Adaptive computation preserved**: Easy puzzles halt early (1-3 steps), hard ones get more (8-16)
+4. **Total compute reasonable**: ~8 encoder forwards per sample, distributed adaptively across batches
 
-### Expected Results
+### Actual Results
 
-Based on our experiments:
-- **Approach 2 (Online)**: 96.7% train accuracy with N=4 steps ✅
-- **Approach 3 (ACT cached)**: 35-50% train accuracy (encoder starved) ❌
-- **Approach 4 (ACT re-encode)**: Should match or exceed 96.7% ✅
+**Experiment: A4_reencode_FIXED** (Step 240, halt_max_steps=16, halt_exploration_prob=0.5)
 
-The encoder will finally get enough gradient signal to learn, while maintaining the benefits of dynamic halting.
+```
+train/accuracy:        86.15%  (token-level)
+train/exact_accuracy:  10.9%   (sequence-level EM)
+train/q_halt_accuracy: 91.8%
+train/q_halt_loss:     0.226
+train/steps:           11.34   (avg ACT steps used)
+```
+
+**Comparison with other approaches**:
+- **ETRM-FCT (N=4, fixed steps)**: 96.7% train accuracy ✅
+- **ETRM (cached)**: 35-50% train accuracy (gradient starvation) ❌
+- **ETRM (current)**: 86.15% train accuracy at step 240 ✅ (still improving)
+
+**Key observations**:
+- ✅ Encoder receives gradients from 100% of samples (gradient starvation fixed)
+- ✅ Training stable with decreasing losses
+- ✅ Exact match rising from 0% (learning happening)
+- ✅ Adaptive halting working (11.34 avg steps vs max 16)
+- ✅ Q-head learning effectively (loss decreasing, accuracy high)
+- 🔄 Accuracy improving but not yet converged (needs more training)
 
 ---
 
 ## Comparison Table
 
-| Aspect | Original TRM | Online TRM | ACT TRM |
-|--------|-------------|-----------|---------|
-| **Puzzle representation** | Learned embedding matrix | Encoder | Encoder |
-| **Forwards per batch** | 1 | N (num_act_steps) | 1 |
-| **Carry persistence** | Yes (across batches) | No (reset each batch) | Yes (across batches) |
-| **Dynamic halting** | Yes (Q-head) | No (fixed steps) | Yes (Q-head) |
-| **Encoder calls per sample** | N/A | N (every ACT step) | 1 (when sample starts) |
-| **Encoder gradient coverage** | N/A | 100% (every step) | 2-10% (only resets) |
-| **Train accuracy** | ~95% (embedding mode) | 96.7% (32 groups) | 35-50% (encoder starved) |
-| **Generalization potential** | None (memorizes IDs) | High (learns from demos) | High (if it worked) |
-| **Compute efficiency** | High | Low (N× encoder) | High |
-| **Training stability** | High | Medium | High |
-| **Implementation complexity** | Low | Low | Medium |
+| Aspect | TRM | ETRM-FCT | ETRM (cached) | ETRM |
+|--------|-----|----------|---------------|------|
+| **Puzzle representation** | Learned embedding | Encoder | Encoder | Encoder |
+| **Halting** | Dynamic (ACT) | Fixed steps | Dynamic (ACT) | Dynamic (ACT) |
+| **Forwards per batch** | 1 | N (e.g., 4-8) | 1 | 1 |
+| **Carry persistence** | Yes (samples cycle) | No (all finish together) | Yes (samples cycle) | Yes (samples cycle) |
+| **Encoder calls per batch** | N/A | N × 256 | ~5-10 (only resets) | 256 (all samples) |
+| **Encoder gradient coverage** | N/A | 100% ✅ | ~2-10% ❌ | 100% ✅ |
+| **Train accuracy** | ~95% (embeddings) | 96.7% ✅ | 35-50% ❌ | 86% ✅ (step 240) |
+| **Generalization potential** | None (IDs) | High | High (if worked) | High |
+| **Adaptive computation** | Yes ✅ | No ❌ | Yes ✅ | Yes ✅ |
+| **Training stability** | High | Medium | High | High |
+| **Status** | ✅ Baseline | ⚠️ Not continuing | ❌ Deprecated | ✅ **Main approach** |
 
 ---
 
 ## Recommendations
 
-### For Development/Research (Current)
-**Use Online TRM** (`pretrain_encoder.py`)
-- Proven to work (96.7% train accuracy)
-- Full encoder gradients
-- Simple to debug
-- Can always optimize later
+### For This Research Project (Current Status: Jan 9, 2026)
+
+**Use ETRM** (`pretrain_encoder_original.py`) - **This is our main research contribution**
+
+✅ **Why**:
+- Preserves TRM's adaptive computation (the key innovation from the paper)
+- Enables true few-shot learning (encoder instead of embeddings)
+- Full encoder gradients (100% coverage, solves gradient starvation)
+- Currently training successfully (86% at step 240, improving)
+- Matches original TRM training dynamics exactly
+
+⚠️ **Note**: ETRM-FCT works well (96.7% accuracy) but lacks adaptive computation, so we're not continuing with it.
+
+**Current focus**: Validate ETRM converges to comparable accuracy as ETRM-FCT, then use for full dataset experiments.
 
 ### For Production/Deployment (Future)
-**Would need hybrid approach:**
+
+Once ETRM is fully validated:
+
+**Use ETRM** as the production approach:
+- Adaptive computation (easy samples halt early, hard samples get more steps)
+- True few-shot learning (generalizes to unseen puzzles)
+- Full gradient signal for encoder learning
+- Same efficiency as TRM (1 forward per batch)
+
+**Potential future optimization** (if re-encoding becomes a bottleneck):
 ```python
-# Option: Periodic re-encoding (not yet implemented)
+# Periodic re-encoding (not yet tested)
 if step % re_encode_interval == 0:
     context = encoder(demos)  # Fresh encoding
 else:
@@ -747,23 +773,48 @@ else:
 carry.cached_context = context  # No detach! Keep gradients
 ```
 
-This would give:
-- Some compute savings from caching
-- Enough encoder gradients to learn (e.g., 25% if re_encode_interval=4)
-- Dynamic halting benefits
+**⚠️ Warning**: Must maintain sufficient encoder gradient coverage (e.g., ≥25%) to avoid gradient starvation
 
 ---
 
 ## Key Insights
 
-1. **Encoder needs dense gradient signal**: Caching + detachment = sparse gradients = poor learning
+1. **Encoder needs dense gradient signal**: Caching + detachment reduces gradients to ~2%, causing poor learning (35-50% accuracy)
 
-2. **Original TRM works with sparse gradients**: Because embeddings are just lookup (no learning per forward), sparse usage doesn't hurt
+2. **TRM works with embeddings**: Embedding lookup doesn't need gradients to work, so TRM's caching is fine
 
-3. **Online mode trades compute for signal**: Re-encoding every step is expensive but gives encoder massive gradient signal
+3. **Fixed vs dynamic halting is the key difference**: ETRM-FCT vs ETRM differ only in halting mechanism, not fundamentally different training paradigms
 
-4. **ACT mode is incompatible with encoder learning**: The very mechanism that makes original TRM efficient (caching + detachment) kills encoder learning
+4. **ETRM preserves TRM dynamics**: Same carry persistence, same adaptive compute, just encoder replaces embedding lookup
 
-5. **True few-shot learning requires encoder**: Can't generalize to unseen puzzles with learned embeddings
+5. **True few-shot learning requires encoder**: Can't generalize to unseen puzzles with learned embeddings (they must be in training set)
 
-The path forward is **online mode** with potential optimizations after we prove the concept works.
+6. **Re-encoding provides full gradients**: 100% encoder gradient coverage every batch, enabling encoder learning while preserving adaptive computation
+
+---
+
+## Implementation Status (Jan 9, 2026)
+
+### ✅ Completed
+- **TRM**: Working baseline with learned embeddings from original paper
+- **ETRM-FCT**: Validated at 96.7% train accuracy (not continuing)
+- **ETRM**: Implemented and training successfully (our main contribution)
+
+### ❌ Deprecated
+- **ETRM (cached)**: Fundamental gradient starvation issue (~2% gradient coverage → 35-50% accuracy)
+
+### 🔄 In Progress
+- **ETRM validation**: Currently 86.15% train accuracy (step 240), still improving
+- Monitoring convergence to compare with ETRM-FCT's 96.7%
+
+### 📝 Files Modified
+- `models/recursive_reasoning/etrm_original.py`: ETRM re-encoding implementation
+- `pretrain_encoder_original.py`: Training script and evaluation fixes
+- `docs/progress_2026_01_09.md`: Comprehensive debugging session documentation
+- `docs/training_modes_comparison.md`: This document (terminology updated)
+
+### 🎯 Next Steps
+1. Continue training ETRM to convergence (monitoring A4_reencode_FIXED)
+2. Compare final metrics to ETRM-FCT (target: ~96%+)
+3. Test generalization on held-out evaluation set
+4. If successful, use ETRM for full dataset experiments

@@ -153,11 +153,17 @@ During training: encoder only sees training puzzles' demos
 During eval: encoder must generalize to unseen puzzles' demos
 ```
 
+### Terminology
+
+- **TRM**: Original paper approach with learned puzzle embeddings and ACT
+- **ETRM**: Our research contribution - encoder-based TRM with dynamic halting
+- **ETRM-FCT**: Explored variant with fixed computation time (not continuing with this)
+
 ### Two Training Modes
 
-We implemented **two training modes** to explore different training dynamics:
+We implemented **two encoder-based training modes** to explore different training dynamics:
 
-#### Mode 1: Online Learning (`pretrain_encoder.py`)
+#### ETRM-FCT: Fixed Computation Time (`pretrain_encoder.py`)
 
 Multiple forward→backward→optim.step() per batch:
 
@@ -175,12 +181,13 @@ for act_step in range(num_act_steps):
 ```
 
 **Characteristics**:
-- Encoder re-encodes demos at every ACT step
-- Later ACT steps benefit from earlier weight updates
-- Fixed number of ACT steps per batch
-- Carry reset each batch
+- All samples do same number of steps (no adaptive computation)
+- Encoder re-encodes demos at every step
+- Later steps benefit from earlier weight updates (N updates per batch)
+- Carry resets because all samples finish together
+- Works well (96.7% train accuracy) but not continuing with this variant
 
-#### Mode 2: Original TRM Dynamics (`pretrain_encoder_original.py`)
+#### ETRM: Encoder-based TRM with Dynamic Halting (`pretrain_encoder_original.py`)
 
 ONE forward per batch, carry persists across batches:
 
@@ -198,11 +205,14 @@ optim.step()
 ```
 
 **Characteristics**:
-- Matches original TRM paper's training dynamics exactly
-- Encoder called once when sample starts, context cached in carry
-- Dynamic halting with Q-head exploration during training
+- Matches TRM paper's training dynamics exactly (our main research contribution)
+- **Encoder re-encodes full batch every step** (changed from caching - see below)
+- Dynamic halting with ACT (easy samples halt early, hard samples get more steps)
 - Samples can span multiple batches before halting
 - Uses truncated BPTT (gradients are local to each batch)
+- Currently training successfully (86% at step 240, improving)
+
+**Important**: Initial implementation used encoder caching (called once when sample starts, cached in carry). This was found to cause **gradient starvation** (~2% encoder gradient coverage) leading to poor accuracy (35-50%). The implementation was updated (Jan 9, 2026) to **re-encode every step**, providing 100% encoder gradient coverage while maintaining dynamic halting benefits. This is now ETRM, our main approach. See `docs/training_modes_comparison.md` for details.
 
 ### Gradient Flow: Truncated BPTT
 
@@ -333,19 +343,19 @@ See `docs/experiments/act_mode_experiments.md` for detailed experiment design.
 
 ## 6. Key Files
 
-### Online Learning Mode
+### ETRM-FCT (Fixed Computation Time)
 | File | Purpose |
 |------|---------|
-| `pretrain_encoder.py` | Training script (online learning) |
-| `models/recursive_reasoning/etrm.py` | Model (online learning) |
+| `pretrain_encoder.py` | Training script (fixed steps) |
+| `models/recursive_reasoning/etrm.py` | Model (fixed steps implementation) |
 | `config/arch/trm_encoder.yaml` | Architecture config |
 | `config/cfg_pretrain_encoder_arc_agi_1.yaml` | Training config |
 
-### Original TRM Mode
+### ETRM (Dynamic Halting - Main Approach)
 | File | Purpose |
 |------|---------|
-| `pretrain_encoder_original.py` | Training script (original dynamics) |
-| `models/recursive_reasoning/etrm_original.py` | Model (original dynamics + encoder caching) |
+| `pretrain_encoder_original.py` | Training script (dynamic halting) |
+| `models/recursive_reasoning/etrm_original.py` | Model (ETRM implementation with re-encoding) |
 | `config/arch/trm_encoder_original.yaml` | Architecture config |
 | `config/cfg_pretrain_encoder_original_arc_agi_1.yaml` | Training config |
 
@@ -366,41 +376,41 @@ See `docs/experiments/act_mode_experiments.md` for detailed experiment design.
 
 ## 7. How to Run
 
-### Online Learning Mode
+### ETRM-FCT (Fixed Steps - Not Continuing)
 
 ```bash
-# ACT ablation
+# Fixed computation time experiments
 torchrun --nproc-per-node 4 pretrain_encoder.py \
     --config-name cfg_pretrain_encoder_arc_agi_1 \
     arch.num_act_steps=4 \
     max_train_groups=32 max_eval_groups=32 \
     +project_name="mmi-714-act-mode" \
-    +run_name="L1_online_4steps"
+    +run_name="etrm_fct_4steps"
 
-# Generalization test (full dataset)
+# Full dataset (if needed)
 torchrun --nproc-per-node 4 pretrain_encoder.py \
     --config-name cfg_pretrain_encoder_arc_agi_1 \
     +project_name="mmi-714-gen" \
-    +run_name="G1_standard_full"
+    +run_name="etrm_fct_full"
 ```
 
-### Original TRM Mode
+### ETRM (Dynamic Halting - Main Approach)
 
 ```bash
-# Original mode baseline
+# ETRM baseline
 torchrun --nproc-per-node 4 pretrain_encoder_original.py \
     --config-name cfg_pretrain_encoder_original_arc_agi_1 \
     max_train_groups=32 max_eval_groups=32 \
     +project_name="mmi-714-act-mode" \
-    +run_name="O1_original_baseline"
+    +run_name="etrm_baseline"
 
-# Original mode with different exploration
+# ETRM with different exploration
 torchrun --nproc-per-node 4 pretrain_encoder_original.py \
     --config-name cfg_pretrain_encoder_original_arc_agi_1 \
     arch.halt_exploration_prob=0.3 \
     max_train_groups=32 max_eval_groups=32 \
     +project_name="mmi-714-act-mode" \
-    +run_name="O2_original_explore0.3"
+    +run_name="etrm_explore0.3"
 ```
 
 ---
@@ -456,7 +466,7 @@ torchrun --nproc-per-node 4 pretrain_encoder_original.py \
 
 ## Appendix: Key Code Patterns
 
-### Online Learning Loop (pretrain_encoder.py)
+### ETRM-FCT Loop (pretrain_encoder.py)
 
 ```python
 carry = None  # Fresh start each batch
@@ -472,7 +482,7 @@ for act_step in range(num_act_steps):
         optim.zero_grad()
 ```
 
-### Original Mode Loop (pretrain_encoder_original.py)
+### ETRM Loop (pretrain_encoder_original.py)
 
 ```python
 # Carry persists across batches
@@ -490,19 +500,25 @@ optim.step()
 optim.zero_grad()
 ```
 
-### Original Mode Forward (etrm_original.py)
+### ETRM Forward (etrm_original.py)
+
+**Current implementation (re-encoding, as of Jan 9, 2026):**
 
 ```python
 def _forward_train_original(self, carry, batch):
     # Determine which samples need reset (were halted)
     needs_reset = carry.halted
 
-    # Encode demos for reset samples ONLY (cache for continuing samples)
-    if needs_reset.any():
-        new_context = self.encoder(demos)
-        context = torch.where(needs_reset.view(-1, 1, 1), new_context, carry.cached_context)
-    else:
-        context = carry.cached_context
+    # Update data for reset samples
+    new_current_data = torch.where(needs_reset, batch, carry.current_data)
+
+    # ALWAYS ENCODE - NO CACHING! (fixes gradient starvation)
+    context = self.encoder(
+        new_current_data["demo_inputs"],   # Full batch (256 samples)
+        new_current_data["demo_labels"],
+        new_current_data["demo_mask"],
+    )
+    # No .detach() - keep gradients flowing to encoder!
 
     # Forward inner model
     inner_carry, logits, (q_halt, q_continue) = self.inner(carry, batch, context)
@@ -514,4 +530,15 @@ def _forward_train_original(self, carry, batch):
         halted = halted & (steps >= min_halt_steps)
 
     return new_carry, outputs
+```
+
+**Previous implementation (caching, DEPRECATED):**
+```python
+# ❌ OLD APPROACH - DO NOT USE
+# This caused gradient starvation (~2% encoder gradient coverage)
+if needs_reset.any():
+    new_context = self.encoder(demos[reset_indices])
+    context = torch.where(needs_reset, new_context, carry.cached_context)
+else:
+    context = carry.cached_context  # ← DETACHED, no gradients!
 ```
