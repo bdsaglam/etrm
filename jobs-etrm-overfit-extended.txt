@@ -16,7 +16,7 @@
 # E1a: Baseline Standard Encoder (previously at 86% step 240, restarting)
 [x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 arch.halt_exploration_prob=0.5 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E1a_baseline"
 
-# E2a: Hybrid Variational Encoder (previously 50.6% with cached ETRM)
+# E2a: Variational Encoder (previously 50.6% with cached ETRM)
 [x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.encoder_norm_style=pre arch.encoder_set_layers=2 arch.halt_exploration_prob=0.5 global_batch_size=128 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E2a_variational"
 
 # E2b: LPN Variational Encoder (previously 51.5% with cached ETRM)
@@ -44,6 +44,37 @@
 # E3b: Longer max steps (32 vs 16 baseline)
 [-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 arch.halt_max_steps=32 arch.halt_exploration_prob=0.5 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E3b_maxsteps32" [2244740]
 
+# E3c: Baseline for comparison (16 steps, 0.5 exploration) - same as E1a
+
+# =============================================================================
+# PHASE 3: Validation & Robustness (Week 3)
+# =============================================================================
+
+# E4a: From scratch (no pretrained decoder) - standard encoder
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 arch.halt_exploration_prob=0.5 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E4a_from_scratch"
+
+# E4b: From scratch with deeper encoder (4 layers)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 arch.encoder_num_layers=4 arch.halt_exploration_prob=0.5 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E4b_from_scratch_deep"
+
+# E2d: Deeper standard encoder (4 layers vs 2)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 arch.encoder_type=standard arch.encoder_num_layers=4 arch.halt_exploration_prob=0.5 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E2d_standard_deep4"
+
+# =============================================================================
+# PHASE 4: Hyperparameter Sensitivity (Optional)
+# =============================================================================
+
+# E5a_low: Lower learning rate (if default is 1e-4, use 5e-5)
+# [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 optimizer.lr=5e-5 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E5a_lr5e-5"
+
+# E5a_high: Higher learning rate (2e-4)
+# [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 optimizer.lr=2e-4 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E5a_lr2e-4"
+
+# E5b_small: Smaller batch size (128 vs 256)
+# [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 global_batch_size=128 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E5b_batch128"
+
+# E5b_large: Larger batch size (512)
+# [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_encoder_original.py --config-name cfg_pretrain_encoder_original_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 global_batch_size=512 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 +project_name="etrm-overfit" +run_name="E5b_batch512"
+
 # =============================================================================
 # NOTES
 # =============================================================================
@@ -51,6 +82,8 @@
 # Priority order:
 # 1. PHASE 1 (Week 1): E2a, E2b, E2c - Re-test failed encoders with re-encoding
 # 2. PHASE 2 (Week 2): E1b, E1c, E1d, E3a, E3b - Understand halting dynamics
+# 3. PHASE 3 (Week 3): E4a, E4b, E2d - Validate robustness
+# 4. PHASE 4 (Optional): E5a_*, E5b_* - Fine-tune hyperparameters
 #
 # Success criteria:
 # - Train accuracy >90% within 5000 steps

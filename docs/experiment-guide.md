@@ -156,6 +156,227 @@ All experiments must pass **both** criteria:
 
 ---
 
+## Metrics Guide
+
+All experiments log comprehensive metrics to W&B. Understanding what each metric means is crucial for diagnosing issues and evaluating progress.
+
+### Core Training Metrics
+
+| Metric | Purpose | What to Look For |
+|--------|---------|------------------|
+| `train/accuracy` | Token-level prediction accuracy | Should reach >90% during overfit phase |
+| `train/exact_accuracy` | Full grid exact match rate | Primary success metric: target >90% for overfit |
+| `train/lm_loss` | Language modeling (prediction) loss | Should decrease steadily, approaching 0.1-0.2 |
+| `train/q_halt_loss` | Halting decision loss | Should decrease; measures how well model learns when to stop |
+| `train/q_halt_accuracy` | Halting prediction accuracy | Should be >85%; measures if model knows when to halt |
+| `train/steps` | Average ACT steps taken per sample | Monitor for reasonable behavior (not always maxing out) |
+| `train/lr` | Current learning rate | Tracks learning rate schedule |
+| `train/count` | Number of training samples in batch | Sanity check for data loading |
+| `train/decoder_frozen` | Whether decoder is frozen (0=no, 1=yes) | Should be 0 if training both encoder+decoder |
+
+**Interpretation**:
+- `train/exact_accuracy` is your primary success metric for Phase 1
+- If `train/accuracy` is high (90%) but `exact_accuracy` is low (20%), model gets most tokens right but struggles with full grids
+- `train/q_halt_loss` and `train/q_halt_accuracy` show if ACT mechanism is working properly
+
+### Encoder Output Statistics
+
+These metrics reveal whether the encoder is learning useful, diverse representations.
+
+| Metric | Purpose | What to Look For |
+|--------|---------|------------------|
+| `train/encoder_cross_sample_var` | Variance of encoder outputs across different samples | **Higher = better diversity**; low values (<0.1) suggest encoder produces similar outputs for all puzzles (collapsed representations) |
+| `train/encoder_output_mean` | Mean of encoder outputs | Should be close to 0 (properly normalized) |
+| `train/encoder_output_norm` | L2 norm of encoder outputs | Depends on architecture; should be stable, not exploding/vanishing |
+| `train/encoder_output_std` | Standard deviation of encoder outputs | Should be ~1.0 for normalized outputs |
+| `train/encoder_token_std` | Standard deviation across tokens within a sample | Higher = more varied representations across tokens |
+
+**Critical Metric**: `train/encoder_cross_sample_var`
+- **Good**: >0.3 (encoder produces diverse representations for different puzzles)
+- **Warning**: 0.1-0.3 (limited diversity, but may still work)
+- **Bad**: <0.1 (encoder producing nearly identical outputs → likely failing to learn patterns)
+
+**Example**: If variance is 0.08, encoder is effectively producing the same representation for all puzzles, which means it's not learning puzzle-specific patterns.
+
+### Gradient Metrics
+
+Monitor gradient flow to diagnose learning issues.
+
+| Metric | Purpose | What to Look For |
+|--------|---------|------------------|
+| `grad/encoder_norm` | Gradient norm for encoder parameters | Should be >0.1 (healthy gradient flow); <0.05 indicates gradient starvation |
+| `grad/inner_norm` | Gradient norm for decoder parameters | Should be significant; shows decoder is learning |
+| `grad/total_norm` | Total gradient norm (after clipping) | Clipped to 1.0; if frequently hitting 1.0, gradients are being clipped |
+
+**Gradient Starvation Detection**:
+- `grad/encoder_norm` < 0.05 → Encoder not receiving sufficient gradients
+- `grad/encoder_norm` / `grad/total_norm` < 0.1 → Encoder getting <10% of gradients (bad)
+- **Healthy ratio**: `grad/encoder_norm` / `grad/total_norm` ≈ 0.2-0.5 (20-50% of gradients)
+
+**Example from previous debugging**:
+- Cached ETRM: `grad/encoder_norm` = 0.02 (2% of gradients) → Failed
+- Re-encoding ETRM: `grad/encoder_norm` = 0.4-0.6 (40-60% of gradients) → Success
+
+### Evaluation Metrics
+
+Metrics computed on the evaluation set (same 32 groups during overfit phase).
+
+| Metric | Purpose | What to Look For |
+|--------|---------|------------------|
+| `all.accuracy` | Token-level accuracy on eval set | Should track training accuracy closely during overfit |
+| `all.exact_accuracy` | Exact match per augmented version | Raw accuracy without voting; typically lower than Pass@K |
+| `all.lm_loss` | Language modeling loss on eval | Should decrease with training loss |
+| `all.q_halt_accuracy` | Halting accuracy on eval | Should be high (>80%) |
+| `all.q_halt_loss` | Halting loss on eval | Should decrease |
+| `all.steps` | Average steps on eval set | Compare with training steps; similar values indicate consistent halting |
+
+**Note**: During overfit phase (32 groups), eval set is the same as train set, so these metrics should closely match training metrics.
+
+### ARC Pass@K Metrics (Voting-Based)
+
+These metrics use voting across ~912 augmented versions of each original puzzle.
+
+| Metric | Purpose | What to Look For |
+|--------|---------|------------------|
+| `ARC/pass@1` | Accuracy with top-1 voted prediction | Best estimate of true performance |
+| `ARC/pass@2` | Accuracy if correct answer in top-2 | Shows benefit of 2 attempts |
+| `ARC/pass@5` | Accuracy if correct answer in top-5 | Useful for final submission strategies |
+| `ARC/pass@10` | Accuracy if correct answer in top-10 | Upper bound on multi-attempt performance |
+| `ARC/pass@100` | Accuracy with top-100 predictions | Even higher upper bound |
+| `ARC/pass@1000` | Accuracy with top-1000 predictions | Maximum possible with voting |
+
+**Understanding the Gap**:
+- If `all.exact_accuracy` = 0.15% but `ARC/pass@1` = 0.25%, voting helps by 1.67x
+- Larger gap = voting is more effective (noise cancellation working)
+- If `ARC/pass@1` ≈ `all.exact_accuracy`, voting provides no benefit (predictions too random)
+
+**Why Pass@K > all.exact_accuracy**:
+Voting aggregates predictions from multiple augmented versions:
+1. Noise cancellation: Random errors average out
+2. Pattern reinforcement: True pattern gets votes from multiple versions
+3. Multiple chances: Top-k allows model to have k guesses
+
+### System Metrics
+
+| Metric | Purpose |
+|--------|---------|
+| `num_params` | Total model parameters |
+| `_runtime` | Total training time in seconds |
+| `_step` | Current training step |
+| `_timestamp` | Unix timestamp |
+| `eval_predictions` | Table of predictions (W&B artifact) |
+| `train_predictions` | Table of training predictions (W&B artifact) |
+
+---
+
+### Phase 1 Monitoring: Key Metrics for Overfit Experiments
+
+During the overfit phase (32 groups, target >90% train accuracy), focus on these metrics:
+
+#### Primary Success Indicators
+
+1. **`train/exact_accuracy`** (Main Goal)
+   - Target: >90%
+   - If stuck at 70-80%: Try different hyperparameters
+   - If stuck at 35-50%: Check for bugs (gradient flow, data issues)
+
+2. **`train/encoder_cross_sample_var`** (Encoder Learning)
+   - Target: >0.3
+   - Warning zone: 0.1-0.3
+   - Failure: <0.1 (encoder not learning diverse patterns)
+   - **Check this early** (within first 100 steps)
+
+3. **`grad/encoder_norm`** (Gradient Flow)
+   - Target: >0.2
+   - Warning: 0.05-0.2
+   - Failure: <0.05 (gradient starvation)
+   - **Check this at step 10** to catch gradient issues immediately
+
+#### Secondary Indicators
+
+4. **`train/steps`** (Halting Behavior)
+   - Should be reasonable, not always hitting `halt_max_steps`
+   - If always maxing out: Model never confident enough to halt
+   - If always ~1-2 steps: Model halting too early, may not be reasoning
+
+5. **`train/q_halt_accuracy`** (Halting Learning)
+   - Target: >85%
+   - If low: Model not learning when to halt properly
+
+6. **`train/lm_loss`** (Prediction Loss)
+   - Should decrease steadily
+   - Final value: ~0.1-0.3 for good performance
+   - If stuck high: Model not learning the prediction task
+
+#### Quick Health Check (First 100 Steps)
+
+Within the first 100 steps, verify:
+
+```
+✅ grad/encoder_norm > 0.2          (encoder getting gradients)
+✅ encoder_cross_sample_var > 0.15  (encoder showing some diversity)
+✅ train/accuracy improving         (model learning something)
+✅ train/steps < halt_max_steps     (not always maxing out)
+```
+
+If any of these fail, diagnose immediately:
+- Low encoder gradients → Check encoder architecture, loss computation
+- Low variance → Encoder architecture may be too weak or initialization issue
+- Not improving → Bug in training loop, data loading, or loss computation
+- Always maxing steps → Halting mechanism not working
+
+#### Example: Good vs Bad Runs
+
+**Good Run** (E1a_baseline at step 749):
+```
+train/exact_accuracy:         23.8%  (improving, will reach >90%)
+train/encoder_cross_sample_var: 0.13  (borderline, but working)
+grad/encoder_norm:            0.20   (healthy gradient flow)
+train/steps:                  6.2    (reasonable, not maxing out)
+```
+
+**Bad Run** (Previous cached ETRM):
+```
+train/exact_accuracy:         50.6%  (stuck, not improving)
+train/encoder_cross_sample_var: 0.05  (collapsed representations!)
+grad/encoder_norm:            0.02   (gradient starvation!)
+train/steps:                  8.5    (seems ok, but encoder not learning)
+```
+
+#### When to Stop an Experiment Early
+
+Stop if any of these occur in first 500 steps:
+- `grad/encoder_norm` stays <0.05 (gradient starvation won't fix itself)
+- `encoder_cross_sample_var` drops to <0.05 (encoder collapsed)
+- `train/exact_accuracy` not improving for 300 steps (stuck)
+- Training diverges (losses exploding, NaN values)
+
+#### What to Monitor in W&B Dashboard
+
+Create a custom W&B dashboard with these panels:
+
+**Panel 1: Success Metrics**
+- `train/exact_accuracy` (primary)
+- `all.exact_accuracy` (should match during overfit)
+- `ARC/pass@1` (voting performance)
+
+**Panel 2: Encoder Health**
+- `train/encoder_cross_sample_var`
+- `grad/encoder_norm`
+- `grad/total_norm` (for reference)
+
+**Panel 3: Learning Dynamics**
+- `train/lm_loss`
+- `train/q_halt_loss`
+- `train/steps`
+
+**Panel 4: Encoder Statistics**
+- `train/encoder_output_norm`
+- `train/encoder_output_std`
+- `train/encoder_token_std`
+
+---
+
 ## Experiment Workflow
 
 ### Phase 1: Overfitting Test (Fast Iteration)
