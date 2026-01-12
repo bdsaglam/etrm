@@ -39,10 +39,11 @@ def softmax_cross_entropy(logits, labels, ignore_index: int = -100):
 
 
 class ACTLossHead(nn.Module):
-    def __init__(self, model: nn.Module, loss_type: str):
+    def __init__(self, model: nn.Module, loss_type: str, kl_weight: float = 0.0):
         super().__init__()
         self.model = model
         self.loss_fn = globals()[loss_type]
+        self.kl_weight = kl_weight  # Weight for KL divergence loss (variational encoders)
 
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
@@ -136,7 +137,17 @@ class ACTLossHead(nn.Module):
         # Filter outputs for return
         detached_outputs = {k: outputs[k].detach() for k in return_keys if k in outputs}
 
+        # Total loss computation
         total_loss = lm_loss + 0.5 * q_halt_loss
+
+        # Add KL loss if present (for variational encoders)
+        if "kl_loss" in outputs and self.kl_weight > 0:
+            kl_loss = outputs["kl_loss"]
+            total_loss = total_loss + self.kl_weight * kl_loss
+            # Log KL loss contribution
+            metrics["kl_loss"] = kl_loss.detach()
+            metrics["kl_loss_weighted"] = (self.kl_weight * kl_loss).detach()
+
         all_halted = torch.tensor(True, device=labels.device)  # Training always "halted" per step
 
         return new_carry, total_loss, metrics, detached_outputs, all_halted

@@ -156,6 +156,55 @@ All experiments must pass **both** criteria:
 
 ---
 
+## Recommended Hyperparameter Values
+
+Based on overfit experiments (Jan 2026), the following parameter values should be explored:
+
+### ACT Halting Parameters
+
+**Always test these configurations:**
+
+1. **TRM Paper Baseline** (control group)
+   - `halt_max_steps = 16`
+   - `halt_explore_prob = 0.5`
+   - Rationale: Original paper values, essential for fair comparison
+
+2. **Best Empirical (shorter steps)**
+   - `halt_max_steps = 8`
+   - `halt_explore_prob = 0.5`
+   - Result: 49.6% train EM (E3a) - best performer but borderline gradient flow
+   - Rationale: Shorter reasoning works better for overfit task
+
+3. **Best Empirical (higher exploration)**
+   - `halt_max_steps = 16`
+   - `halt_explore_prob = 0.7`
+   - Result: 48.4% train EM (E1d) - healthy gradients (0.414)
+   - Rationale: More exploration helps, better gradient flow
+
+4. **Deterministic** (optional)
+   - `halt_max_steps = 16`
+   - `halt_explore_prob = 0.0`
+   - Result: 41.0% train EM (E1c) - healthy gradients
+   - Rationale: Deterministic reasoning can work, avoids exploration noise
+
+**Key Insight**: Avoid middle exploration values (0.3-0.5) except for baseline - creates U-shaped performance curve where extremes (0.0 or 0.7) work better than middle ground.
+
+### Training Hyperparameters
+
+- `batch_size = 256` (per GPU, or 128 for deeper encoders if memory limited)
+- Learning rate: Use config defaults (typically 1e-4 to 3e-4)
+- Gradient clipping: 1.0 (essential for stability)
+
+### When Testing New Encoders
+
+For each new encoder architecture, run at minimum:
+1. Baseline config (max_steps=16, explore=0.5, batch=256)
+2. One optimized config (max_steps=8, explore=0.5 OR max_steps=16, explore=0.7)
+
+This allows fair comparison to TRM paper while also testing best-known values.
+
+---
+
 ## Metrics Guide
 
 All experiments log comprehensive metrics to W&B. Understanding what each metric means is crucial for diagnosing issues and evaluating progress.

@@ -482,11 +482,23 @@ class TRMWithEncoder(nn.Module):
 
         # ALWAYS ENCODE - NO CACHING!
         # This ensures 100% gradient coverage for the encoder
-        context = self.encoder(
+        encoder_output = self.encoder(
             new_current_data["demo_inputs"],   # Full batch
             new_current_data["demo_labels"],   # Full batch
             new_current_data["demo_mask"],     # Full batch
+            return_full_output=True,           # Get kl_loss if variational
         )
+
+        # Extract context (works for both tensor and EncoderOutput)
+        if hasattr(encoder_output, 'context'):
+            # EncoderOutput from variational encoder
+            context = encoder_output.context
+            # Store KL loss for loss computation
+            if hasattr(encoder_output, 'kl_loss') and encoder_output.kl_loss is not None:
+                encoder_diagnostics["kl_loss"] = encoder_output.kl_loss
+        else:
+            # Plain tensor from standard encoder
+            context = encoder_output
 
         # Compute encoder diagnostics
         with torch.no_grad():
@@ -581,11 +593,23 @@ class TRMWithEncoder(nn.Module):
         encoder_diagnostics = {}
 
         # ALWAYS ENCODE - NO CACHING! (consistent with training)
-        context = self.encoder(
+        encoder_output = self.encoder(
             new_current_data["demo_inputs"],   # Full batch
             new_current_data["demo_labels"],   # Full batch
             new_current_data["demo_mask"],     # Full batch
+            return_full_output=True,           # Get kl_loss if variational
         )
+
+        # Extract context (works for both tensor and EncoderOutput)
+        if hasattr(encoder_output, 'context'):
+            # EncoderOutput from variational encoder
+            context = encoder_output.context
+            # Store KL loss for diagnostics (eval mode, not used in loss)
+            if hasattr(encoder_output, 'kl_loss') and encoder_output.kl_loss is not None:
+                encoder_diagnostics["kl_loss"] = encoder_output.kl_loss
+        else:
+            # Plain tensor from standard encoder
+            context = encoder_output
 
         # Compute encoder diagnostics
         with torch.no_grad():
