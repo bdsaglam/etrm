@@ -1,22 +1,21 @@
 """
-Training script for encoder-based TRM TRAINING MODE.
+Training script for encoder-based TRM with DYNAMIC HALTING.
 
 This script implements TRM training dynamics:
-- ONE forward per batch (not num_act_steps like online learning)
-- Carry persists across batches (samples can span multiple batches)
-- Dynamic halting with Q-head exploration
-- Encoder called once when sample starts (cached in carry)
+- ONE forward per batch (carry persists across batches)
+- Dynamic halting with Q-head exploration during training
+- Encoder re-encodes every step (full gradient coverage)
 
 This matches the TRM paper's training approach where:
 - Gradients are LOCAL to each batch (truncated BPTT)
 - Carry state persists but is detached between batches
 - Q-head learns when to halt through exploration
 
-Key differences from pretrain_etrm.py (online learning):
-1. Single forward per batch (no ACT loop)
-2. Carry persists in train_state (not reset each batch)
-3. Uses etrm.py model with _forward_train()
-4. halt_exploration_prob controls random exploration during training
+Training behavior:
+- Single forward per batch (model decides when to halt internally)
+- Carry persists in train_state (not reset each batch)
+- Uses etrm.py model with _forward_train_original()
+- halt_exploration_prob controls random exploration during training
 """
 
 import copy

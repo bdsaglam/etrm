@@ -1,12 +1,12 @@
 """
-Encoder-based TRM (eTRM) - ORIGINAL TRAINING MODE with RE-ENCODING.
+Encoder-based TRM (eTRM) - original TRAINING MODE with RE-ENCODING.
 
-This is a clone of etrm.py modified to use ORIGINAL TRM training dynamics with
+This is a clone of etrm.py modified to use original TRM training dynamics with
 re-encoding instead of caching (Approach 4):
-- ONE forward per batch (not num_act_steps like online learning)
+- One forward per batch
 - Carry persists across batches (samples can span multiple batches)
 - Dynamic halting with Q-head exploration
-- Encoder RE-ENCODES full batch every step (NO CACHING)
+- Encoder RE-ENCODES full batch every step
 
 This matches the original TRM paper's training approach where:
 - Gradients are LOCAL to each batch (truncated BPTT)
@@ -16,7 +16,7 @@ This matches the original TRM paper's training approach where:
 Key differences from etrm.py (online learning):
 1. Training uses _forward_train() with dynamic halting
 2. Encoder re-encodes full batch every step (100% gradient coverage)
-3. Single forward per batch (vs num_act_steps forwards)
+3. Single forward per batch
 4. halt_exploration_prob controls random exploration during training
 
 This approach provides:
@@ -111,10 +111,9 @@ class TRMEncoderConfig(BaseModel):
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
 
-    # ACT config
-    num_act_steps: int = 1  # Fixed ACT steps for training (1, 4, 8, 16)
-    halt_max_steps: int     # Max steps during eval (adaptive halting)
-    halt_exploration_prob: float  # Only used during eval
+    # ACT config - Dynamic halting
+    halt_max_steps: int  # Max steps before forced halt
+    halt_exploration_prob: float  # Exploration probability during training
 
     forward_dtype: str = "bfloat16"
 

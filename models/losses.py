@@ -57,10 +57,10 @@ class ACTLossHead(nn.Module):
         # Model forward
         new_carry, outputs = self.model(**model_kwargs)
 
-        # Handle training (online learning) vs eval (adaptive halting)
+        # Handle training (dynamic halting) vs eval (adaptive halting)
         if self.model.training:
-            # Training mode: single ACT step with online learning
-            # Training loop calls this num_act_steps times with backward+optim each
+            # Training mode: single forward with dynamic halting
+            # Model decides when to halt internally through Q-head exploration
             return self._forward_train_step(new_carry, outputs, model_kwargs["batch"], return_keys)
         else:
             # Eval mode: single step with carry-based halting

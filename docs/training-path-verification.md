@@ -142,7 +142,6 @@ encoder_num_layers: 2
 encoder_pooling_method: mean
 
 # ACT settings - DYNAMIC HALTING
-num_act_steps: 1             # Ignored in original mode
 halt_exploration_prob: 0.5   # Exploration during training
 halt_max_steps: 16           # Max steps before forced halt
 

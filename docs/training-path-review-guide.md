@@ -11,7 +11,6 @@ This codebase has **multiple training modes** that evolved over time. When archi
 **Common failure pattern**:
 - Job calls script → Script loads config → Config loads arch → Arch specifies model
 - If any link is wrong, training runs but with wrong behavior (silent failure!)
-- Example: Using `num_act_steps=4` (fixed) instead of dynamic halting → steps stuck at 4
 
 ---
 
@@ -116,8 +115,7 @@ loss:
 encoder_type: standard
 encoder_num_layers: 2
 
-# Critical: Which ACT mode?
-num_act_steps: 1           # Fixed: use N steps per batch
+# ACT params
 halt_exploration_prob: 0.5 # Dynamic: explore during training
 halt_max_steps: 16
 ```
@@ -128,13 +126,8 @@ halt_max_steps: 16
 - ✅ Class is exported from that module
 - ✅ ACT mode matches intent (fixed vs dynamic)
 
-**How to tell ACT mode**:
-- **Fixed/Online**: `num_act_steps: 4/8/16` (loops N times per batch)
-- **Dynamic/Original**: `num_act_steps: 1` with `halt_exploration_prob` (one forward, carry persists)
-
 **Red Flags**:
 - ❌ Module path has `_original` or outdated suffix
-- ❌ `num_act_steps > 1` but you expect dynamic halting
 - ❌ Missing `halt_exploration_prob` for dynamic mode
 
 ---
@@ -216,24 +209,6 @@ class <ClassName>(nn.Module):
 | `lpn_standard` | 6 | LPN-style architecture | Comparison to LPN paper |
 | `lpn_variational` | 6 | LPN variational (needs test-time optimization) | Research |
 
-### ACT Halting Modes
-
-**Why Two Modes Exist**:
-
-1. **Fixed/Online** (Approach 2, removed):
-   - Loop `num_act_steps` times per batch
-   - Simpler training, deterministic steps
-   - Problem: Doesn't match original TRM dynamics
-   - **Status**: Removed from codebase
-
-2. **Dynamic/Original** (Active):
-   - One forward per batch, carry persists across batches
-   - Q-head learns when to halt through exploration
-   - Matches original TRM paper's truncated BPTT
-   - **Status**: This is what we use
-
-**Key Insight**: Dynamic halting is more efficient (easy samples halt early) and matches how TRM was originally trained.
-
 ---
 
 ## Quick Verification Checklist
@@ -270,12 +245,7 @@ Use this when reviewing or after making changes:
 **Check**: Arch config's `name: path@Class` doesn't match file structure
 **Fix**: Update module path or move file to match
 
-### Pitfall 4: Silent Wrong Mode
-**Symptom**: ACT steps constant (stuck at 4) instead of varying
-**Check**: Using fixed `num_act_steps` instead of dynamic halting
-**Fix**: Ensure correct arch config and model implementation
-
-### Pitfall 5: Data Path Wrong
+### Pitfall 4: Data Path Wrong
 **Symptom**: Encoder not being used, or wrong data loader
 **Check**: Using embedding-mode data for encoder training
 **Fix**: Point to correct preprocessed data directory
