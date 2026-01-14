@@ -1,0 +1,97 @@
+# ETRMTRM Overfit Experiments
+# See docs/experiments/etrmtrm_overfit_experiments.md for experiment design
+
+# ============================================================================
+# WEEK 1: VALIDATION (Priority 1)
+# Goal: Verify ETRMTRM works and doesn't regress from ETRM
+# ============================================================================
+
+# E0b: ETRMTRM Baseline - CRITICAL VALIDATION
+# This is the most important experiment - must pass before proceeding
+# Expected: >90% train acc, similar convergence to ETRM
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.recurrent_encoder_type=recurrent_standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 +project_name="etrmtrm-overfit" +run_name="E0b_etrmtrm_baseline" 
+
+# E2b: Confirm baseline halting params work
+# Same as E0b but explicitly testing halting configuration
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 +project_name="etrmtrm-overfit" +run_name="E2b_halt_baseline"
+
+# ============================================================================
+# WEEK 2: OPTIMIZATION (Run after E0b succeeds)
+# Goal: Find optimal configuration for recurrent encoder
+# ============================================================================
+
+# E1a: Deeper Grid Encoder (4 layers vs 2)
+# Hypothesis: More capacity in per-demo encoding helps recurrent aggregation
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.encoder_num_layers=4 +project_name="etrmtrm-overfit" +run_name="E1a_deeper_encoder_4layers"
+
+# E1b: Hybrid Grid Encoder (LPN-style deep encoder)
+# Hypothesis: LPN-style deep encoder for per-demo encoding
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.encoder_num_layers=4 arch.encoder_norm_style=pre global_batch_size=128 +project_name="etrmtrm-overfit" +run_name="E1b_hybrid_prenorm_4layers"
+
+# E2c: Longer max_steps (32 vs 16)
+# Hypothesis: Recurrent encoder may need more steps to refine context
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.halt_max_steps=32 +project_name="etrmtrm-overfit" +run_name="E2c_halt_max32"
+
+# E2d: Higher exploration (0.7 vs 0.5)
+# Hypothesis: More exploration means more encoder updates
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.halt_exploration_prob=0.7 +project_name="etrmtrm-overfit" +run_name="E2d_halt_explore0.7"
+
+# E3b: Lower learning rate (5e-5 vs 1e-4)
+# Hypothesis: Recurrent encoder's carry state may benefit from slower learning
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 lr=5e-5 +project_name="etrmtrm-overfit" +run_name="E3b_lr5e-5"
+
+# ============================================================================
+# WEEK 3: REFINEMENT (Run based on Week 2 results)
+# Goal: Test extremes and sensitivities
+# ============================================================================
+
+# E2a: Shorter max_steps (8 vs 16)
+# Test: Force efficiency with fewer steps
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.halt_max_steps=8 +project_name="etrmtrm-overfit" +run_name="E2a_halt_max8"
+
+# E2e: No exploration (0.0 vs 0.5)
+# Test: Deterministic halting behavior
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 arch.halt_exploration_prob=0.0 +project_name="etrmtrm-overfit" +run_name="E2e_halt_explore0.0"
+
+# E3c: Higher learning rate (2e-4 vs 1e-4)
+# Test: Faster convergence possible?
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 lr=2e-4 +project_name="etrmtrm-overfit" +run_name="E3c_lr2e-4"
+
+# E3d: Encoder 2x slower learning rate (encoder_lr_scale=0.5)
+# Test: Encoder learns at half the decoder's rate
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 encoder_lr_scale=0.5 +project_name="etrmtrm-overfit" +run_name="E3d_encoder_lr_scale0.5"
+
+# E4a: Smaller batch (128 vs 256)
+# Test: More frequent updates
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 global_batch_size=128 +project_name="etrmtrm-overfit" +run_name="E4a_batch128"
+
+# E4c: Larger batch (512 vs 256)
+# Test: More stable gradients
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 global_batch_size=512 +project_name="etrmtrm-overfit" +run_name="E4c_batch512"
+
+# ============================================================================
+# OPTIONAL: Transfer Learning Experiments
+# Test loading pretrained ETRM decoder
+# ============================================================================
+
+# E0b_pretrained: ETRMTRM with pretrained decoder
+# Load decoder weights from ETRM checkpoint
+# [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 max_train_groups=32 max_eval_groups=32 epochs=20000 eval_interval=1000 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrmtrm-overfit" +run_name="E0b_pretrained_decoder"
+
+# ============================================================================
+# EXECUTION PLAN
+# ============================================================================
+#
+# 1. START WITH: E0b (critical validation)
+#    - If E0b fails: debug before running anything else
+#    - If E0b succeeds: proceed to Week 2
+#
+# 2. WEEK 2: Run E1a, E2c, E2d, E3b in parallel
+#    - Compare which changes improve over E0b
+#
+# 3. WEEK 3: Based on Week 2 results, run refinement experiments
+#    - Test extremes and boundaries
+#
+# 4. ANALYSIS: After each week, update comparison table in experiment doc
+#    - Document convergence speed, final accuracy, avg steps
+#    - Decide whether to continue or pivot

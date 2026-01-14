@@ -16,31 +16,6 @@
 # - Best empirical: max_steps=16, explore=0.7 (healthy gradients from overfit)
 #
 # Expected outcome: Identify 1-2 configs for final long training (50k epochs)
-
-# =============================================================================
-# Hybrid Standard (4-layer) - PRIMARY RECOMMENDATION
-# Expected: 35-45% test EM based on high variance (1.70) + healthy gradients (0.26)
-# =============================================================================
-
-# SF1: Hybrid_standard with TRM paper baseline hyperparams
-[-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF1_hybrid_std_baseline" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=200 [2710141]
-
-# SF2: Hybrid_standard with high exploration (best from overfit with healthy grads)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF2_hybrid_std_explore0.7" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=128 epochs=1000 eval_interval=200
-
-# =============================================================================
-# Hybrid Variational (4-layer) - CROSS-ATTENTION ARCHITECTURE
-# Rationale: Test cross-attention architecture (sees all demos jointly)
-# Uses kl_weight=0 for deterministic training (avoids stochastic sampling issues)
-# Expected: Similar to hybrid_standard but with attention-based aggregation
-# =============================================================================
-
-# SF3: Hybrid_variational with TRM paper baseline (deterministic, kl=0)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF3_hybrid_var_baseline" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=200
-
-# SF4: Hybrid_variational with high exploration (deterministic, kl=0)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF4_hybrid_var_explore0.7" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=128 epochs=1000 eval_interval=200
-
 # =============================================================================
 # BASELINE COMPARISON - Standard 2-layer (for reference)
 # =============================================================================
@@ -50,6 +25,31 @@
 
 # SF6: Standard 2-layer with high exploration (test if 0.7 helps simple encoder)
 [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF6_standard_explore0.7" arch.encoder_type=standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=256 epochs=1000 eval_interval=200
+
+# =============================================================================
+# Hybrid Standard (4-layer) - PRIMARY RECOMMENDATION
+# Expected: 35-45% test EM based on high variance (1.70) + healthy gradients (0.26)
+# =============================================================================
+
+# SF1: Hybrid_standard with TRM paper baseline hyperparams
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF1_hybrid_std_baseline" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=200
+
+# SF2: Hybrid_standard with high exploration (best from overfit with healthy grads)
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF2_hybrid_std_explore0.7" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=128 epochs=1000 eval_interval=200
+
+# =============================================================================
+# Hybrid Variational (4-layer) - CROSS-ATTENTION ARCHITECTURE
+# Rationale: Test cross-attention architecture (sees all demos jointly)
+# Uses kl_weight=0 for deterministic training (avoids stochastic sampling issues)
+# Expected: Similar to hybrid_standard but with attention-based aggregation
+# =============================================================================
+
+# SF3: Hybrid_variational with TRM paper baseline (deterministic, kl=0)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF3_hybrid_var_baseline" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=200 
+
+# SF4: Hybrid_variational with high exploration (deterministic, kl=0)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF4_hybrid_var_explore0.7" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=128 epochs=1000 eval_interval=200
+
 
 # =============================================================================
 # NOTES FOR NEXT PHASE

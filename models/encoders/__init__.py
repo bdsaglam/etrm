@@ -15,6 +15,10 @@ Based on "Searching Latent Program Spaces" paper.
 - LPNStandardEncoder: Deeper transformer (8 layers), CLS pooling, simpler aggregation
 - LPNVariationalEncoder: LPN-style with per-demo variational bottleneck
 - LPNVariationalEncoderV2: LPN-style with aggregate-first variational bottleneck
+
+Recurrent encoders (for ETRMTRM):
+- RecurrentAggregationEncoder: Simple carry-based recurrence, no H/L loops (Variant A)
+- TRMStyleEncoder: TRM-like with H/L loops (Variant B)
 """
 
 from models.encoders.base import (
@@ -30,6 +34,12 @@ from models.encoders.lpn_standard import LPNStandardEncoder
 from models.encoders.lpn_variational import LPNVariationalEncoder, LPNVariationalEncoderV2
 from models.encoders.hybrid_variational import HybridVariationalEncoder
 from models.encoders.hybrid_standard import HybridStandardEncoder
+from models.encoders.recurrent_base import (
+    BaseRecurrentEncoder,
+    RecurrentEncoderCarry,
+    TRMStyleEncoderCarry,
+)
+from models.encoders.recurrent_standard import RecurrentAggregationEncoder
 
 __all__ = [
     # Base and factory
@@ -48,4 +58,9 @@ __all__ = [
     # Hybrid architecture
     "HybridStandardEncoder",
     "HybridVariationalEncoder",
+    # Recurrent encoders
+    "BaseRecurrentEncoder",
+    "RecurrentEncoderCarry",
+    "TRMStyleEncoderCarry",
+    "RecurrentAggregationEncoder",
 ]

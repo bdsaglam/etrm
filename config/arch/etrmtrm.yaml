@@ -1,0 +1,64 @@
+# ETRMTRM architecture config - Recurrent Encoder + TRM Decoder
+#
+# Uses etrmtrm.py which implements recurrent encoder:
+# - Encoder has carry state that evolves across ACT steps
+# - Encoder called every step, context evolves
+# - Decoder unchanged from ETRM
+#
+# Two encoder variants:
+# - recurrent_standard (Variant A): Simple carry, no H/L loops
+# - trm_style (Variant B): TRM-like with H/L loops
+name: recursive_reasoning.etrmtrm@TRMWithRecurrentEncoder
+loss:
+  name: losses@ACTLossHead
+  loss_type: stablemax_cross_entropy
+  kl_weight: 0.0
+
+# === Recurrent Encoder Settings ===
+recurrent_encoder_type: recurrent_standard  # "recurrent_standard" or "trm_style"
+
+# Base encoder settings (for both variants)
+encoder_type: standard  # Unused in recurrent mode, kept for compatibility
+encoder_num_layers: 2   # Depth of grid encoder (per-demo transformer)
+encoder_pooling_method: mean
+encoder_set_layers: 1
+encoder_layer_scale_init: 0.0
+encoder_norm_style: post
+encoder_qk_norm: False
+freeze_encoder: False
+
+# For TRM-style encoder (Variant B only)
+encoder_h_cycles: 3  # H-level iterations in encoder (only for trm_style)
+encoder_l_cycles: 1  # L-level iterations per H-cycle (only for trm_style)
+encoder_l_layers: 2  # Layers in encoder's L_level (only for trm_style)
+
+# === TRM Decoder Settings (same as ETRM) ===
+# ACT settings - DYNAMIC HALTING
+halt_exploration_prob: 0.5
+halt_max_steps: 16
+
+# TRM reasoning cycles
+H_cycles: 3
+L_cycles: 6
+
+H_layers: 0
+L_layers: 2
+
+# === Shared Transformer Config ===
+hidden_size: 512
+num_heads: 8
+expansion: 4
+
+# Context length (encoder output tokens)
+puzzle_emb_len: 16
+
+# Position encodings
+pos_encodings: rope
+forward_dtype: bfloat16
+
+# Optional settings
+mlp_t: False
+no_ACT_continue: True
+
+# Compatibility (not used in encoder mode)
+puzzle_emb_ndim: 0
