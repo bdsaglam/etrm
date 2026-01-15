@@ -238,6 +238,7 @@ def create_encoder(config: DemoEncoderConfig) -> BaseDemoEncoder:
     from models.encoders.lpn_variational import LPNVariationalEncoder, LPNVariationalEncoderV2
     from models.encoders.hybrid_variational import HybridVariationalEncoder
     from models.encoders.hybrid_standard import HybridStandardEncoder
+    from models.encoders.lpn import LPNEncoder, LPNVariationalEncoder as LPNPaperVariationalEncoder
 
     encoder_map = {
         "standard": StandardDemoEncoder,
@@ -247,6 +248,9 @@ def create_encoder(config: DemoEncoderConfig) -> BaseDemoEncoder:
         "lpn_variational_v2": LPNVariationalEncoderV2,
         "hybrid_standard": HybridStandardEncoder,
         "hybrid_variational": HybridVariationalEncoder,
+        # LPN paper-matching encoders (2 layers, 128 hidden, LayerNorm, SiLU)
+        "lpn": LPNEncoder,
+        "lpn_var": LPNPaperVariationalEncoder,
     }
 
     encoder_type = config.encoder_type.lower()

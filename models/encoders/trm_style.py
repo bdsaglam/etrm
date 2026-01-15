@@ -31,6 +31,7 @@ class TRMStyleEncoderBlock(nn.Module):
         # Self-attention
         self.self_attn = Attention(
             hidden_size=config.hidden_size,
+            head_dim=config.hidden_size // config.num_heads,
             num_heads=config.num_heads,
             num_key_value_heads=config.num_heads,
             causal=False,

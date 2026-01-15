@@ -316,10 +316,13 @@ class TRMWithRecurrentEncoder(nn.Module):
         )
 
         # Halting logic (no exploration in eval)
+        # During eval, always run to max steps (for batch consistency)
+        # This ensures all samples halt at the same time, avoiding infinite loops
+        # where some samples keep resetting while others are still processing
         with torch.no_grad():
             new_steps = new_steps + 1
             is_last_step = new_steps >= self.config.halt_max_steps
-            halted = is_last_step | (q_halt_logits > 0)
+            halted = is_last_step  # Only halt at max steps for deterministic eval
 
         # Build outputs
         outputs = {

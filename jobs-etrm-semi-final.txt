@@ -57,6 +57,63 @@
 # SF3_kl_2: Hybrid_variational with TRM paper baseline with kl=0.0001
 [x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF3_hybrid_var_kl_2" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.01 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=500 max_eval_groups=32 
 
+# LPN Encoder Semi-Final Experiments
+# Goal: Compare LPN paper-exact vs our previous LPN implementations
+#
+# Dataset:
+#   - Train: Full training set (~560 puzzle groups)
+#   - Eval: Limited to 32 puzzle groups (for speed)
+# Duration: 1000 epochs per experiment
+# Eval: Every 500 epochs
+#
+# IMPORTANT: All experiments use pretrained TRM decoder
+# - Pretrained decoder path: /home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071
+#
+# Architectures tested:
+# A. Paper-exact LPN (lpn, lpn_var):
+#    - 2 layers, 128 hidden, LayerNorm, SiLU, absolute 2D pos
+# B. Our previous LPN (lpn_standard, lpn_variational):
+#    - 8 layers, 512 hidden, RMSNorm, SwiGLU, RoPE
+#
+# =============================================================================
+# LPN PAPER-EXACT (2 layers, 128 hidden, LayerNorm, SiLU)
+# =============================================================================
+
+# LPN1: Paper-exact standard
+[-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="LPN1_paper_std" arch.encoder_type=lpn global_batch_size=256 epochs=1000 eval_interval=500 max_eval_groups=32 [3190621]
+
+# LPN2: Paper-exact variational with kl_weight=1e-4
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="LPN2_paper_var" arch.encoder_type=lpn_var global_batch_size=256 epochs=1000 eval_interval=500 max_eval_groups=32
+
+# =============================================================================
+# OUR PREVIOUS LPN (8 layers, 512 hidden, RMSNorm, SwiGLU, RoPE)
+# =============================================================================
+
+# LPN3: Our LPN standard (8 layers, deep)
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="LPN3_deep_std" arch.encoder_type=lpn_standard arch.encoder_num_layers=8 global_batch_size=256 epochs=1000 eval_interval=500 max_eval_groups=32
+
+# LPN4: Our LPN variational (8 layers, deep) with kl_weight=1e-4
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="LPN4_deep_var" arch.encoder_type=lpn_variational arch.encoder_num_layers=8 global_batch_size=256 epochs=1000 eval_interval=500 max_eval_groups=32
+
+# =============================================================================
+# COMPARISON NOTES
+# =============================================================================
+#
+# Encoder parameter counts:
+# - lpn (paper-exact standard): 1.45M params
+# - lpn_var (paper-exact variational): 673K params
+# - lpn_standard (our deep): ~30M params (8 layers, 512 hidden)
+# - lpn_variational (our deep): ~30M params
+#
+# Key questions:
+# 1. Does paper-exact (smaller) generalize better than our deep adaptation?
+# 2. Does variational (per-demo VAE) help with generalization?
+# 3. How do these compare to hybrid architectures (SF1, SF3)?
+#
+# Compare against:
+# - SF5_standard_baseline: 43.4% train, 1% test
+# - SF1_hybrid_std_baseline: 37.5% train, 0.5% test
+
 
 # =============================================================================
 # NOTES FOR NEXT PHASE
@@ -80,3 +137,70 @@
 # - Is explore=0.7 still better than 0.5 on full dataset?
 # - What's the train/test gap for each architecture?
 # - How does deterministic variational (kl=0) compare to standard encoder?
+
+# ETRM Final Experiments - Full Dataset Training
+# Goal: Train best architectures to convergence on full dataset
+#
+# Dataset:
+#   - Train: Full training set (~560 puzzle groups)
+#   - Eval: 32 puzzle groups from test set (true generalization test)
+# Duration: 50k epochs per experiment
+# Eval: Every 25k epochs (2 evaluation points per run)
+# Predictions: Logged every 50k steps
+#
+# IMPORTANT: All experiments use pretrained TRM decoder
+# - Pretrained decoder path: /home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071
+#
+# Architectures:
+# 1. standard (2-layer): Best semi-final performer (43% train, 1% test)
+# 2. hybrid_variational (4-layer): Cross-attention with KL regularization
+# 3. ETRMTRM recurrent encoder: TBD (deferred)
+# 4. LPN: TBD (after semi-final LPN experiments complete)
+#
+# =============================================================================
+# F1: STANDARD ENCODER (2-layer) - BASELINE
+# =============================================================================
+# Best performer from semi-final: 43% train accuracy, 1% test pass@1
+# Simple architecture, good gradient flow
+
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F1_standard" arch.encoder_type=standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+
+# =============================================================================
+# F2: HYBRID VARIATIONAL (4-layer) - CROSS-ATTENTION WITH KL
+# =============================================================================
+# Cross-attention architecture with variational bottleneck
+# KL weight 1e-4 to regularize latent space
+
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F2_hybrid_var" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0001 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+
+# =============================================================================
+# F3: ETRMTRM TRM-STYLE ENCODER (from E0c)
+# =============================================================================
+# TRM-style recurrent encoder with H/L loops (Variant B)
+# Config from E0c: h_cycles=3, l_cycles=1, l_layers=2
+
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F3_etrmtrm" arch.recurrent_encoder_type=trm_style arch.encoder_h_cycles=3 arch.encoder_l_cycles=1 arch.encoder_l_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+
+# =============================================================================
+# F4: LPN ENCODER - TBD (after semi-final LPN experiments)
+# =============================================================================
+# Will add best LPN variant after LPN1-4 semi-final experiments complete
+# Candidates: lpn (paper-exact, 1.45M params) or lpn_standard (deep, ~30M params)
+
+# [ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F4_lpn" arch.encoder_type=TBD epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+
+# =============================================================================
+# NOTES
+# =============================================================================
+#
+# Expected timeline: ~2-3 days per experiment on 4xGPU
+#
+# Success criteria:
+# - Primary: Test set ARC/pass@1 (target: >5% for true generalization)
+# - Secondary: Train/test gap (smaller = better generalization)
+# - Diagnostic: Gradient health, encoder variance
+#
+# After experiments complete:
+# 1. Run analysis notebook with PROJECT="etrm-final"
+# 2. Compare test set generalization across architectures
+# 3. Analyze failure cases and prediction patterns

@@ -331,11 +331,11 @@ def test_lpn_standard_encoder():
     """Test the LPN standard encoder."""
     print("=== Testing LPNStandardEncoder ===\n")
 
-    # Use LPN-style defaults (8 layers)
+    # Note: Official LPN uses 2 layers with 128 hidden; we use 8 layers with 512 hidden
     config = DemoEncoderConfig(
         hidden_size=512,
         num_heads=8,
-        num_layers=8,  # LPN uses 8 layers
+        num_layers=8,  # Deeper than official LPN (2 layers) for potentially richer representations
         output_tokens=16,
         vocab_size=12,
         seq_len=900,

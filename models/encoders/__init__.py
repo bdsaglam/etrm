@@ -34,6 +34,7 @@ from models.encoders.lpn_standard import LPNStandardEncoder
 from models.encoders.lpn_variational import LPNVariationalEncoder, LPNVariationalEncoderV2
 from models.encoders.hybrid_variational import HybridVariationalEncoder
 from models.encoders.hybrid_standard import HybridStandardEncoder
+from models.encoders.lpn import LPNEncoder, LPNVariationalEncoder as LPNPaperVariationalEncoder
 from models.encoders.recurrent_base import (
     BaseRecurrentEncoder,
     RecurrentEncoderCarry,
@@ -59,6 +60,9 @@ __all__ = [
     # Hybrid architecture
     "HybridStandardEncoder",
     "HybridVariationalEncoder",
+    # LPN paper-matching encoders (2 layers, 128 hidden, LayerNorm, SiLU)
+    "LPNEncoder",
+    "LPNPaperVariationalEncoder",
     # Recurrent encoders
     "BaseRecurrentEncoder",
     "RecurrentEncoderCarry",
