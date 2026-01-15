@@ -188,6 +188,15 @@ def create_model_encoder(
         causal=False,
     )
 
+    # Validate: variational encoders require kl_weight > 0
+    encoder_type = model_cfg.get("encoder_type", "") or model_cfg.get("recurrent_encoder_type", "")
+    kl_weight = config.arch.loss.__pydantic_extra__.get("kl_weight", 0)  # type: ignore
+    if "variational" in encoder_type and kl_weight <= 0:
+        raise ValueError(
+            f"Variational encoder '{encoder_type}' requires kl_weight > 0, got {kl_weight}. "
+            "Set arch.loss.kl_weight to a positive value (e.g., 0.0001) in config or command line."
+        )
+
     # Instantiate model with loss head
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
@@ -667,6 +676,7 @@ def evaluate_encoder(
                 "demo_inputs": [],
                 "demo_labels": [],
                 "demo_mask": [],
+                "puzzle_identifiers": [],
             }
 
         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
@@ -722,6 +732,7 @@ def evaluate_encoder(
                     eval_pred_samples["demo_inputs"].append(batch["demo_inputs"][:n].cpu())
                     eval_pred_samples["demo_labels"].append(batch["demo_labels"][:n].cpu())
                     eval_pred_samples["demo_mask"].append(batch["demo_mask"][:n].cpu())
+                    eval_pred_samples["puzzle_identifiers"].append(batch["puzzle_identifiers"][:n].cpu())
 
             del carry, loss, preds, batch, all_finish
 
@@ -817,6 +828,7 @@ def evaluate_encoder(
                 demo_inputs=torch.cat(eval_pred_samples["demo_inputs"], dim=0),
                 demo_labels=torch.cat(eval_pred_samples["demo_labels"], dim=0),
                 demo_mask=torch.cat(eval_pred_samples["demo_mask"], dim=0),
+                puzzle_identifiers=torch.cat(eval_pred_samples["puzzle_identifiers"], dim=0),
             )
 
     return reduced_metrics
@@ -1000,6 +1012,7 @@ def launch(hydra_config: DictConfig):
                         demo_inputs=batch_out.get("demo_inputs"),
                         demo_labels=batch_out.get("demo_labels"),
                         demo_mask=batch_out.get("demo_mask"),
+                        puzzle_identifiers=batch_out.get("puzzle_identifiers"),
                     )
 
             if config.ema:

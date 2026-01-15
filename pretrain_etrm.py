@@ -22,6 +22,7 @@ import copy
 import math
 import os
 import shutil
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -195,6 +196,15 @@ def create_model_encoder(
         num_puzzle_identifiers=train_metadata.num_puzzle_identifiers,
         causal=False,
     )
+
+    # Validate: variational encoders require kl_weight > 0
+    encoder_type = model_cfg.get("encoder_type", "standard")
+    kl_weight = config.arch.loss.__pydantic_extra__.get("kl_weight", 0)  # type: ignore
+    if "variational" in encoder_type and kl_weight <= 0:
+        raise ValueError(
+            f"Variational encoder '{encoder_type}' requires kl_weight > 0, got {kl_weight}. "
+            "Set arch.loss.kl_weight to a positive value (e.g., 0.0001) in config or command line."
+        )
 
     # Instantiate model with loss head
     model_cls = load_model_class(config.arch.name)
@@ -675,6 +685,7 @@ def evaluate_encoder(
                 "demo_inputs": [],
                 "demo_labels": [],
                 "demo_mask": [],
+                "puzzle_identifiers": [],
             }
 
         set_ids = {k: idx for idx, k in enumerate(eval_metadata.sets)}
@@ -684,9 +695,11 @@ def evaluate_encoder(
         metric_values = None
         carry = None
         processed_batches = 0
+        total_eval_samples = 0  # Count total evaluation samples
 
         for set_name, batch, global_batch_size in eval_loader:
             processed_batches += 1
+            total_eval_samples += global_batch_size  # Count samples
             if rank == 0:
                 print(f"Processing batch {processed_batches}: {set_name}")
 
@@ -730,6 +743,7 @@ def evaluate_encoder(
                     eval_pred_samples["demo_inputs"].append(batch["demo_inputs"][:n].cpu())
                     eval_pred_samples["demo_labels"].append(batch["demo_labels"][:n].cpu())
                     eval_pred_samples["demo_mask"].append(batch["demo_mask"][:n].cpu())
+                    eval_pred_samples["puzzle_identifiers"].append(batch["puzzle_identifiers"][:n].cpu())
 
             del carry, loss, preds, batch, all_finish
 
@@ -825,9 +839,10 @@ def evaluate_encoder(
                 demo_inputs=torch.cat(eval_pred_samples["demo_inputs"], dim=0),
                 demo_labels=torch.cat(eval_pred_samples["demo_labels"], dim=0),
                 demo_mask=torch.cat(eval_pred_samples["demo_mask"], dim=0),
+                puzzle_identifiers=torch.cat(eval_pred_samples["puzzle_identifiers"], dim=0),
             )
 
-    return reduced_metrics
+    return reduced_metrics, total_eval_samples
 
 
 def save_code_and_config(config: PretrainEncoderConfig):
@@ -967,6 +982,12 @@ def launch(hydra_config: DictConfig):
         ema_helper = EMAHelper(mu=config.ema_rate)
         ema_helper.register(train_state.model)
 
+    # Timing metrics - track samples and time
+    cumulative_train_time = 0.0
+    cumulative_eval_time = 0.0
+    cumulative_train_samples = 0  # Total training samples processed
+    cumulative_eval_samples = 0   # Total evaluation samples processed
+
     # Training Loop
     for _iter_id in range(total_iters):
         print(f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
@@ -974,6 +995,11 @@ def launch(hydra_config: DictConfig):
         ############ Train Iter
         if RANK == 0:
             print("TRAIN")
+
+        # Start training timer
+        train_start_time = time.perf_counter()
+        train_interval_samples = 0  # Count samples in this interval
+
         train_state.model.train()
         for set_name, batch, global_batch_size in train_loader:
             next_step = train_state.step + 1
@@ -992,6 +1018,9 @@ def launch(hydra_config: DictConfig):
                 return_preds=should_log_preds,
             )
 
+            # Count samples processed
+            train_interval_samples += global_batch_size
+
             if RANK == 0 and metrics is not None:
                 wandb.log(metrics, step=train_state.step)
                 progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
@@ -1008,10 +1037,30 @@ def launch(hydra_config: DictConfig):
                         demo_inputs=batch_out.get("demo_inputs"),
                         demo_labels=batch_out.get("demo_labels"),
                         demo_mask=batch_out.get("demo_mask"),
+                        puzzle_identifiers=batch_out.get("puzzle_identifiers"),
                     )
 
             if config.ema:
                 ema_helper.update(train_state.model)
+
+        # Record training time and samples for this interval
+        train_interval_time = time.perf_counter() - train_start_time
+        cumulative_train_time += train_interval_time
+        cumulative_train_samples += train_interval_samples
+
+        # Calculate normalized metrics
+        train_samples_per_sec = train_interval_samples / train_interval_time if train_interval_time > 0 else 0
+        train_ms_per_sample = (train_interval_time * 1000) / train_interval_samples if train_interval_samples > 0 else 0
+
+        # Log training timing metrics
+        if RANK == 0:
+            timing_metrics = {
+                "timing/train_samples_per_second": train_samples_per_sec,
+                "timing/train_ms_per_sample": train_ms_per_sample,
+                "timing/train_time_per_interval_seconds": train_interval_time,
+                "timing/train_samples_this_interval": train_interval_samples,
+            }
+            wandb.log(timing_metrics, step=train_state.step)
 
         if _iter_id >= config.min_eval_interval:
             ############ Evaluation
@@ -1024,7 +1073,11 @@ def launch(hydra_config: DictConfig):
             else:
                 train_state_eval = train_state
             train_state_eval.model.eval()
-            metrics = evaluate_encoder(
+
+            # Start evaluation timer
+            eval_start_time = time.perf_counter()
+
+            metrics, eval_samples = evaluate_encoder(
                 config,
                 train_state_eval,
                 eval_loader,
@@ -1034,6 +1087,31 @@ def launch(hydra_config: DictConfig):
                 world_size=WORLD_SIZE,
                 cpu_group=CPU_PROCESS_GROUP,
             )
+
+            # Record evaluation time
+            eval_interval_time = time.perf_counter() - eval_start_time
+            cumulative_eval_time += eval_interval_time
+            cumulative_eval_samples += eval_samples
+
+            # Calculate normalized metrics
+            eval_samples_per_sec = eval_samples / eval_interval_time if eval_interval_time > 0 else 0
+            eval_ms_per_sample = (eval_interval_time * 1000) / eval_samples if eval_samples > 0 else 0
+
+            # Calculate ratios (how much slower is eval per sample?)
+            throughput_ratio = train_samples_per_sec / eval_samples_per_sec if eval_samples_per_sec > 0 else 0
+            time_per_sample_ratio = eval_ms_per_sample / train_ms_per_sample if train_ms_per_sample > 0 else 0
+
+            # Log evaluation timing metrics
+            if RANK == 0:
+                eval_timing_metrics = {
+                    "timing/eval_samples_per_second": eval_samples_per_sec,
+                    "timing/eval_ms_per_sample": eval_ms_per_sample,
+                    "timing/eval_time_per_interval_seconds": eval_interval_time,
+                    "timing/eval_samples_this_interval": eval_samples,
+                    "timing/train_vs_eval_throughput_ratio": throughput_ratio,
+                    "timing/eval_vs_train_time_ratio": time_per_sample_ratio,
+                }
+                wandb.log(eval_timing_metrics, step=train_state.step)
 
             if RANK == 0 and metrics is not None:
                 wandb.log(metrics, step=train_state.step)

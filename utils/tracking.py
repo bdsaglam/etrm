@@ -18,6 +18,7 @@ def log_arc_predictions(
     demo_inputs: Optional[torch.Tensor] = None,
     demo_labels: Optional[torch.Tensor] = None,
     demo_mask: Optional[torch.Tensor] = None,
+    puzzle_identifiers: Optional[torch.Tensor] = None,
 ) -> None:
     """Log ARC prediction visualizations to W&B.
 
@@ -32,6 +33,7 @@ def log_arc_predictions(
         demo_inputs: Optional demo input grids tensor (B, max_K, seq_len)
         demo_labels: Optional demo label grids tensor (B, max_K, seq_len)
         demo_mask: Optional demo mask tensor (B, max_K), True where demo is valid
+        puzzle_identifiers: Optional puzzle IDs (B,). If provided, selects one sample per unique puzzle.
     """
     if wandb.run is None:
         return
@@ -46,14 +48,25 @@ def log_arc_predictions(
         demo_labels_np = demo_labels.cpu().numpy()
         demo_mask_np = demo_mask.cpu().numpy()
 
-    num_samples = min(len(inputs_np), max_samples)
+    # Select indices to log (one per unique puzzle if puzzle_identifiers provided)
+    if puzzle_identifiers is not None:
+        puzzle_ids_np = puzzle_identifiers.cpu().numpy()
+        # Get unique puzzle IDs and their first occurrence indices
+        _, unique_indices = np.unique(puzzle_ids_np, return_index=True)
+        # Sort by index to maintain batch order, then limit to max_samples
+        selected_indices = np.sort(unique_indices)[:max_samples]
+        num_samples = len(selected_indices)
+    else:
+        # Original behavior: take first max_samples
+        num_samples = min(len(inputs_np), max_samples)
+        selected_indices = np.arange(num_samples)
 
     columns = ["step", "idx", "correct", "input", "label", "prediction"]
     if has_demos:
         columns.append("demos")
     table = wandb.Table(columns=columns)
 
-    for idx in range(num_samples):
+    for idx in selected_indices:
         # Check correctness (only on non-masked positions)
         label = labels_np[idx]
         pred = preds_np[idx]

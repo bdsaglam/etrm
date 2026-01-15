@@ -1,10 +1,17 @@
 # ETRM Semi-Final Experiments - Full Dataset Exploration
 # Goal: Identify best architecture + hyperparams for final 50k epoch training
 #
-# Dataset: Full training set (~560 puzzle groups)
+# Dataset:
+#   - Train: Full training set (~560 puzzle groups)
+#   - Eval: Limited to 32 puzzle groups (for speed)
 # Duration: 1000 epochs per experiment (quick test to identify best configs)
 # Eval: Every 200 epochs (5 evaluation points per run)
 # Note: Shorter than planned 10k steps for faster iteration
+#
+# IMPORTANT: All experiments use pretrained TRM decoder
+# - Pretrained decoder path: /home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071
+# - This allows encoder to learn without having to train decoder from scratch
+# - Matches successful overfit experiments (E1a, E2c, etc.)
 #
 # Architectures tested:
 # 1. hybrid_standard (4-layer): Expected winner - high variance + healthy gradients
@@ -21,10 +28,7 @@
 # =============================================================================
 
 # SF5: Standard 2-layer with paper baseline (control - what we know works)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF5_standard_baseline" arch.encoder_type=standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=1000 eval_interval=200
-
-# SF6: Standard 2-layer with high exploration (test if 0.7 helps simple encoder)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF6_standard_explore0.7" arch.encoder_type=standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=256 epochs=1000 eval_interval=200
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF5_standard_baseline" arch.encoder_type=standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=1000 eval_interval=500 max_eval_groups=32
 
 # =============================================================================
 # Hybrid Standard (4-layer) - PRIMARY RECOMMENDATION
@@ -32,10 +36,7 @@
 # =============================================================================
 
 # SF1: Hybrid_standard with TRM paper baseline hyperparams
-[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF1_hybrid_std_baseline" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=200
-
-# SF2: Hybrid_standard with high exploration (best from overfit with healthy grads)
-[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF2_hybrid_std_explore0.7" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=128 epochs=1000 eval_interval=200
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF1_hybrid_std_baseline" arch.encoder_type=hybrid_standard arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=500 max_eval_groups=32
 
 # =============================================================================
 # Hybrid Variational (4-layer) - CROSS-ATTENTION ARCHITECTURE
@@ -44,11 +45,17 @@
 # Expected: Similar to hybrid_standard but with attention-based aggregation
 # =============================================================================
 
-# SF3: Hybrid_variational with TRM paper baseline (deterministic, kl=0)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF3_hybrid_var_baseline" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=200 
+# SF3: Hybrid_variational with TRM paper baseline
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF3_hybrid_var_baseline" arch.encoder_type=hybrid_variational arch.loss.kl_weight=0.0 arch.encoder_num_layers=4 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=500 max_eval_groups=32
 
-# SF4: Hybrid_variational with high exploration (deterministic, kl=0)
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 +project_name="etrm-semi-final" +run_name="SF4_hybrid_var_explore0.7" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0 arch.halt_max_steps=16 arch.halt_exploration_prob=0.7 global_batch_size=128 epochs=1000 eval_interval=200
+# SF3_kl_4: Hybrid_variational with TRM paper baseline with kl=0.0001
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF3_hybrid_var" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0001 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=500 max_eval_groups=32
+
+# SF3_kl_3: Hybrid_variational with TRM paper baseline with kl=0.0001
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF3_hybrid_var_kl_3" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.001 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=500 max_eval_groups=32 
+
+# SF3_kl_2: Hybrid_variational with TRM paper baseline with kl=0.0001
+[x] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-semi-final-subset-eval" +run_name="SF3_hybrid_var_kl_2" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.01 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=1000 eval_interval=500 max_eval_groups=32 
 
 
 # =============================================================================
@@ -56,7 +63,7 @@
 # =============================================================================
 #
 # After these experiments complete (est. ~12-24 hours for all):
-# 1. Run notebook analysis (notebooks/etrm_experiment_analysis.ipynb with PROJECT="etrm-semi-final")
+# 1. Run notebook analysis (notebooks/etrm_experiment_analysis.ipynb with PROJECT="etrm-semi-final-subset-eval")
 # 2. Look for:
 #    - Test set accuracy (ARC/pass@1) - PRIMARY METRIC
 #    - Healthy gradient flow (grad/encoder_norm > 0.2)

@@ -209,5 +209,10 @@ class RecurrentAggregationEncoder(BaseRecurrentEncoder):
         mlp_out = self.mlp(z_e)
         z_e = rms_norm(z_e + mlp_out, variance_epsilon=self.norm_eps)
 
+        # EMA smoothing: gradual context evolution instead of abrupt changes
+        # This helps decoder track a slowly moving target rather than chasing large jumps
+        # Smooth with previous state (90% old, 10% new)
+        z_e_smoothed = 0.9 * carry.z_e.detach() + 0.1 * z_e
+
         # Detach to break computational graph (allows reuse across batches)
-        return RecurrentEncoderCarry(z_e=z_e.detach())
+        return RecurrentEncoderCarry(z_e=z_e_smoothed.detach())

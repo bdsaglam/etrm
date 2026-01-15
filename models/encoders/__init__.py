@@ -40,6 +40,7 @@ from models.encoders.recurrent_base import (
     TRMStyleEncoderCarry,
 )
 from models.encoders.recurrent_standard import RecurrentAggregationEncoder
+from models.encoders.trm_style import TRMStyleEncoder
 
 __all__ = [
     # Base and factory
@@ -63,4 +64,5 @@ __all__ = [
     "RecurrentEncoderCarry",
     "TRMStyleEncoderCarry",
     "RecurrentAggregationEncoder",
+    "TRMStyleEncoder",
 ]

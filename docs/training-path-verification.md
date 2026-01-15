@@ -135,7 +135,7 @@ name: recursive_reasoning.etrm@TRMWithEncoder
 loss:
   name: losses@ACTLossHead
   loss_type: stablemax_cross_entropy
-  kl_weight: 0.0
+  kl_weight: 0.0001  # KL divergence weight for variational encoders
 
 encoder_type: standard
 encoder_num_layers: 2

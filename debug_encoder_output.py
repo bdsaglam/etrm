@@ -175,7 +175,7 @@ def test_encoder_sensitivity(checkpoint_path: str):
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python debug_encoder_output.py <checkpoint_path>")
-        print("Example: python debug_encoder_output.py checkpoints/SF1_hybrid_std_baseline/checkpoint_latest.pt")
+        print("Example: python debug_encoder_output.py checkpoints/etrm-semi-final-subset-eval/SF3_hybrid_var_baseline/step_6970")
         sys.exit(1)
 
     test_encoder_sensitivity(sys.argv[1])

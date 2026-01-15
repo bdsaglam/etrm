@@ -1,0 +1,4 @@
+- ARC-AGI 2 benchmark
+- LPN style gradient-based optimization in latent space + TRM
+- Contrastive loss for encoder: encourage encoder to produce similar representations for demos from SAME puzzle and different representations for demos from DIFFERENT puzzles
+- 
