@@ -1,39 +1,77 @@
-# Less is More: Recursive Reasoning with Tiny Networks
+# ETRM: Encoder-based Tiny Recursive Model
 
-This is the codebase for the paper: "Less is More: Recursive Reasoning with Tiny Networks". TRM is a recursive reasoning approach that achieves amazing scores of 45% on ARC-AGI-1 and 8% on ARC-AGI-2 using a tiny 7M parameters neural network.
+This project extends the [Tiny Recursive Model (TRM)](https://github.com/SamsungSAILMontreal/TinyRecursiveModels) to enable true few-shot learning on the ARC-AGI benchmark by replacing task-specific embeddings with a demonstration encoder.
 
-[Paper](https://arxiv.org/abs/2510.04871)
+## Motivation
 
-### Motivation
+TRM achieved 45% accuracy on ARC-AGI-1 with only 7M parameters through recursive reasoning. However, [analysis by the ARC Prize Foundation](https://arcprize.org/blog/hrm-analysis) revealed a critical limitation:
 
-Tiny Recursion Model (TRM) is a recursive reasoning model that achieves amazing scores of 45% on ARC-AGI-1 and 8% on ARC-AGI-2 with a tiny 7M parameters neural network. The idea that one must rely on massive foundational models trained for millions of dollars by some big corporation in order to achieve success on hard tasks is a trap. Currently, there is too much focus on exploiting LLMs rather than devising and expanding new lines of direction. With recursive reasoning, it turns out that “less is more”: you don’t always need to crank up model size in order for a model to reason and solve hard problems. A tiny model pretrained from scratch, recursing on itself and updating its answers over time, can achieve a lot without breaking the bank.
+> "TRM assigns each task a unique identifier (puzzle_id) that is fed into a learned embedding layer. During inference, the model receives only a single input grid and its puzzle_id—it never sees demonstration pairs. The transformation rule is therefore not inferred from demonstrations at test time; instead, it is encoded into the puzzle_id embedding weights during training."
 
-This work came to be after I learned about the recent innovative Hierarchical Reasoning Model (HRM). I was amazed that an approach using small models could do so well on hard tasks like the ARC-AGI competition (reaching 40% accuracy when normally only Large Language Models could compete). But I kept thinking that it is too complicated, relying too much on biological arguments about the human brain, and that this recursive reasoning process could be greatly simplified and improved. Tiny Recursion Model (TRM) simplifies recursive reasoning to its core essence, which ultimately has nothing to do with the human brain, does not require any mathematical (fixed-point) theorem, nor any hierarchy.
+This means TRM **memorizes** task-specific transformations rather than learning to **infer** them from demonstrations—fundamentally deviating from ARC-AGI's few-shot learning intent.
 
-### How TRM works
+## Our Approach
 
-<p align="center">
-  <img src="https://AlexiaJM.github.io/assets/images/TRM_fig.png" alt="TRM"  style="width: 30%;">
-</p>
+We replace the puzzle_id embedding with a **demonstration encoder** that processes input-output pairs directly:
 
-Tiny Recursion Model (TRM) recursively improves its predicted answer y with a tiny network. It starts with the embedded input question x and initial embedded answer y and latent z. For up to K improvements steps, it tries to improve its answer y. It does so by i) recursively updating n times its latent z given the question x, current answer y, and current latent z (recursive reasoning), and then ii) updating its answer y given the current answer y and current latent z. This recursive process allows the model to progressively improve its answer (potentially addressing any errors from its previous answer) in an extremely parameter-efficient manner while minimizing overfitting.
+```
+Original TRM:
+  puzzle_id → Embedding Matrix Lookup → context vector
 
-### Requirements
+ETRM:
+  demo pairs → Neural Network Encoder → context vector
+```
 
-Installation should take a few minutes. For the smallest experiments on Sudoku-Extreme (pretrain_mlp_t_sudoku), you need 1 GPU with enough memory. With 1 L40S (48Gb Ram), it takes around 18h to finish. In case that you run into issues due to library versions, here is the requirements with the exact versions used: [specific_requirements.txt](https://github.com/SamsungSAILMontreal/TinyRecursiveModels/blob/main/specific_requirements.txt).
+The encoder learns to extract transformation rules from demonstrations, enabling generalization to truly unseen tasks at test time.
 
-- Python 3.10 (or similar)
-- Cuda 12.6.0 (or similar)
+### Architecture
+
+```
+Demo Pairs: [(input1, output1), (input2, output2), ...]
+                              ↓
+              ┌─────────────────────────────────────────┐
+              │  Demonstration Encoder                  │
+              │                                         │
+              │  Per-demo encoding:                     │
+              │    Transformer (2 layers)               │
+              │    Input+Output → concat → encode       │
+              │    Mean pool → single vector            │
+              │                                         │
+              │  Cross-demo aggregation:                │
+              │    Cross-attention (1 layer)            │
+              │    16 learnable query tokens            │
+              │                                         │
+              └─────────────────────────────────────────┘
+                              ↓
+              Context: (batch, 16, 512) - replaces puzzle embedding
+                              ↓
+              TRM Inner Model (unchanged recursive reasoning)
+```
+
+### Key Difference from Original TRM
+
+| Aspect | Original TRM | ETRM |
+|--------|--------------|------|
+| Task representation | Learned puzzle_id embedding | Encoded from demo pairs |
+| Training set | Includes eval task demos | Strictly excludes eval tasks |
+| Generalization | To seen puzzle_ids only | To any task with demos |
+| Few-shot capability | Not truly few-shot | True few-shot inference |
+
+## Requirements
+
+- Python 3.10+
+- CUDA 12.6.0+
+- 1-4 GPUs (L40S or H100 recommended)
 
 ```bash
 pip install --upgrade pip wheel setuptools
-pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126 # install torch based on your cuda version
-pip install -r requirements.txt # install requirements
-pip install --no-cache-dir --no-build-isolation adam-atan2 
-wandb login YOUR-LOGIN # login if you want the logger to sync results to your Weights & Biases (https://wandb.ai/)
+pip install --pre --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu126
+pip install -r requirements.txt
+pip install --no-cache-dir --no-build-isolation adam-atan2
+wandb login YOUR-LOGIN  # optional, for experiment tracking
 ```
 
-### Dataset Preparation
+## Dataset Preparation
 
 ```bash
 # ARC-AGI-1
@@ -42,128 +80,36 @@ python -m dataset.build_arc_dataset \
   --output-dir data/arc1concept-aug-1000 \
   --subsets training evaluation concept \
   --test-set-name evaluation
-
-# ARC-AGI-2
-python -m dataset.build_arc_dataset \
-  --input-file-prefix kaggle/combined/arc-agi \
-  --output-dir data/arc2concept-aug-1000 \
-  --subsets training2 evaluation2 concept \
-  --test-set-name evaluation2
-
-## Note: You cannot train on both ARC-AGI-1 and ARC-AGI-2 and evaluate them both because ARC-AGI-2 training data contains some ARC-AGI-1 eval data
-
-# Sudoku-Extreme
-python dataset/build_sudoku_dataset.py --output-dir data/sudoku-extreme-1k-aug-1000  --subsample-size 1000 --num-aug 1000  # 1000 examples, 1000 augments
-
-# Maze-Hard
-python dataset/build_maze_dataset.py # 1000 examples, 8 augments
 ```
 
-## Experiments
+## Training
 
-### Sudoku-Extreme (assuming 1 L40S GPU):
+### ETRM (Dynamic Halting)
 
 ```bash
-run_name="pretrain_mlp_t_sudoku"
-python pretrain.py \
-arch=trm \
-data_paths="[data/sudoku-extreme-1k-aug-1000]" \
-evaluators="[]" \
-epochs=50000 eval_interval=5000 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
-arch.mlp_t=True arch.pos_encodings=none \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=6 \
-+run_name=${run_name} ema=True
-
-Expected: Around 87% exact-accuracy (+- 2%)
-
-run_name="pretrain_att_sudoku"
-python pretrain.py \
-arch=trm \
-data_paths="[data/sudoku-extreme-1k-aug-1000]" \
-evaluators="[]" \
-epochs=50000 eval_interval=5000 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=6 \
-+run_name=${run_name} ema=True
+torchrun --nproc-per-node 4 pretrain_etrm.py \
+    --config-name cfg_pretrain_encoder_original_arc_agi_1 \
+    +project_name="etrm" \
+    +run_name="etrm_baseline"
 ```
 
-Expected: Around 75% exact-accuracy (+- 2%)
+### Encoder Variants
 
-*Runtime:* < 20 hours
+| Type | Description |
+|------|-------------|
+| `standard` | 2-layer transformer + mean pooling |
+| `lpn_standard` | Deeper encoder (4-8 layers) with CLS pooling |
+| `lpn_variational` | VAE version with KL regularization |
 
-### Maze-Hard (assuming 4 L40S GPUs):
+## Evaluation
 
-```bash
-run_name="pretrain_att_maze30x30"
-torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
-arch=trm \
-data_paths="[data/maze-30x30-hard-1k]" \
-evaluators="[]" \
-epochs=50000 eval_interval=5000 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=4 \
-+run_name=${run_name} ema=True
-```
+The key metric is accuracy on held-out evaluation tasks that were **never seen during training**—measuring true few-shot generalization rather than memorization.
 
-*Runtime:* < 24 hours
+## References
 
-Actually, you can run Maze-Hard with 1 L40S GPU by reducing the batch-size with no noticable loss in performance:
+This project builds upon:
 
-```bash
-run_name="pretrain_att_maze30x30_1gpu"
-python pretrain.py \
-arch=trm \
-data_paths="[data/maze-30x30-hard-1k]" \
-evaluators="[]" \
-epochs=50000 eval_interval=5000 \
-lr=1e-4 puzzle_emb_lr=1e-4 weight_decay=1.0 puzzle_emb_weight_decay=1.0 global_batch_size=128 \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=4 \
-+run_name=${run_name} ema=True
-```
-
-*Runtime:* < 24 hours
-
-
-### ARC-AGI-1 (assuming 4 H-100 GPUs):
-
-```bash
-run_name="pretrain_att_arc1concept_4"
-torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
-arch=trm \
-data_paths="[data/arc1concept-aug-1000]" \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=4 \
-+run_name=${run_name} ema=True
-
-```
-
-*Runtime:* ~3 days
-
-### ARC-AGI-2 (assuming 4 H-100 GPUs):
-
-```bash
-run_name="pretrain_att_arc2concept_4"
-torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
-arch=trm \
-data_paths="[data/arc2concept-aug-1000]" \
-arch.L_layers=2 \
-arch.H_cycles=3 arch.L_cycles=4 \
-+run_name=${run_name} ema=True
-
-```
-
-*Runtime:* ~3 days
-
-
-## Reference
-
-If you find our work useful, please consider citing:
-
+**Tiny Recursive Model (TRM)**
 ```bibtex
 @misc{jolicoeurmartineau2025morerecursivereasoningtiny,
       title={Less is More: Recursive Reasoning with Tiny Networks}, 
@@ -176,8 +122,7 @@ If you find our work useful, please consider citing:
 }
 ```
 
-and the Hierarchical Reasoning Model (HRM):
-
+**Hierarchical Reasoning Model (HRM)**
 ```bibtex
 @misc{wang2025hierarchicalreasoningmodel,
       title={Hierarchical Reasoning Model}, 
@@ -190,4 +135,8 @@ and the Hierarchical Reasoning Model (HRM):
 }
 ```
 
-This code is based on the Hierarchical Reasoning Model [code](https://github.com/sapientinc/HRM) and the Hierarchical Reasoning Model Analysis [code](https://github.com/arcprize/hierarchical-reasoning-model-analysis).
+## Acknowledgments
+
+- Original TRM codebase: [SamsungSAILMontreal/TinyRecursiveModels](https://github.com/SamsungSAILMontreal/TinyRecursiveModels)
+- HRM analysis: [arcprize/hierarchical-reasoning-model-analysis](https://github.com/arcprize/hierarchical-reasoning-model-analysis)
+- ARC Prize Foundation for the [HRM analysis](https://arcprize.org/blog/hrm-analysis) that motivated this work
