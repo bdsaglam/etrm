@@ -25,6 +25,7 @@ from typing import Any, Optional
 import torch
 from hydra import initialize_config_dir, compose
 from hydra.core.global_hydra import GlobalHydra
+from omegaconf import OmegaConf
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -76,19 +77,26 @@ def load_config(config_name: str, overrides: list) -> Any:
     return cfg
 
 
-def infer_model_type(config: Any) -> str:
-    """Infer model type from config's arch parameters."""
-    arch_extra = config.arch.__pydantic_extra__
+def get_arch_params(config: Any) -> dict:
+    """Extract arch parameters as dict, excluding 'name' and 'loss'."""
+    arch_dict = OmegaConf.to_container(config.arch, resolve=True)
+    # Remove special keys that aren't model params
+    arch_dict.pop("name", None)
+    arch_dict.pop("loss", None)
+    return arch_dict
 
-    # ETRMTRM has recurrent_encoder_type in its arch config
-    if "recurrent_encoder_type" in arch_extra:
+
+def get_loss_params(config: Any) -> dict:
+    """Extract loss parameters as dict, excluding 'name'."""
+    loss_dict = OmegaConf.to_container(config.arch.loss, resolve=True)
+    loss_dict.pop("name", None)
+    return loss_dict
+
+
+def infer_model_type(config_name: str) -> str:
+    """Infer model type from config filename."""
+    if "etrmtrm" in config_name.lower():
         return "etrmtrm"
-
-    # Check arch name if available
-    arch_name = getattr(config.arch, "name", "")
-    if "etrmtrm" in arch_name.lower():
-        return "etrmtrm"
-
     return "etrm"
 
 
@@ -104,9 +112,10 @@ def create_model(config: Any, model_type: str, batch_size: int):
         num_groups=100,
     )
 
-    # Build model config
+    # Build model config from arch params
+    arch_params = get_arch_params(config)
     model_cfg = dict(
-        **config.arch.__pydantic_extra__,
+        **arch_params,
         batch_size=batch_size,
         vocab_size=metadata.vocab_size,
         seq_len=metadata.seq_len,
@@ -126,7 +135,8 @@ def create_model(config: Any, model_type: str, batch_size: int):
 
     # Wrap with loss head
     loss_head_cls = load_model_class(config.arch.loss.name)
-    model = loss_head_cls(base_model, **config.arch.loss.__pydantic_extra__)
+    loss_params = get_loss_params(config)
+    model = loss_head_cls(base_model, **loss_params)
 
     return model
 
@@ -273,16 +283,17 @@ def main():
     gpu_name = torch.cuda.get_device_name(0)
     gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
 
-    # Load config first to infer model type
-    config = load_config(args.config_name, args.config_overrides)
-
-    # Infer model type if not specified
-    model_type = args.model_type or infer_model_type(config)
+    # Infer model type if not specified (from config name)
+    model_type = args.model_type or infer_model_type(args.config_name)
     model_type_str = f"{model_type} (auto-detected)" if args.model_type is None else model_type
 
+    # Load config
+    config = load_config(args.config_name, args.config_overrides)
+
     # Print key config values
-    encoder_type = config.arch.__pydantic_extra__.get("encoder_type", "standard")
-    encoder_layers = config.arch.__pydantic_extra__.get("encoder_num_layers", 2)
+    arch_params = get_arch_params(config)
+    encoder_type = arch_params.get("encoder_type", "standard")
+    encoder_layers = arch_params.get("encoder_num_layers", 2)
 
     print("=" * 60)
     print("Batch Size Finder")
