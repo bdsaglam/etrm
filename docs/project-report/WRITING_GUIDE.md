@@ -1,0 +1,139 @@
+# Section Writing Guide
+
+Instructions for agents drafting report sections.
+
+---
+
+## Your Task
+
+1. **Read** the outline file in `outlines/`
+2. **Write** a full prose draft to `sections/`
+3. **Expand** bullet points into complete paragraphs
+
+---
+
+## File Locations
+
+| Section | Outline (input) | Draft (output) |
+|---------|-----------------|----------------|
+| Introduction | `outlines/01_introduction.md` | `sections/01_introduction.md` |
+| Background & Related Work | `outlines/02_background_and_related_work.md` | `sections/02_background_and_related_work.md` |
+| Method | `outlines/04_method.md` | `sections/03_method.md` |
+| Experiments | `outlines/05_experiments.md` | `sections/04_experiments.md` |
+| Discussion | `outlines/06_discussion.md` | `sections/05_discussion.md` |
+
+---
+
+## Key Resources
+
+| Resource | Path | Use For |
+|----------|------|---------|
+| Project context | `docs/project.md` | Technical details, architecture |
+| Research proposal | `docs/proposal.md` | Problem statement, motivation |
+| Codebase docs | `docs/codebase.md` | Implementation details |
+| Related work | `docs/related-work/resources.md` | Papers to cite |
+| Data flow | `docs/data_flow.md` | Dataset, preprocessing |
+
+---
+
+## Writing Style
+
+**Format**: Academic/conference paper style
+**Audience**: ML researchers, somewhat familiar with TRM/ARC-AGI
+**Tone**: Technical but accessible, no fluff
+
+**Do:**
+- Use precise technical language
+- Include specific numbers (parameters, accuracies) when available
+- Reference figures/tables by number (e.g., "as shown in Figure 1")
+- Cite papers using [Author, Year] format
+- Keep paragraphs focused (one idea per paragraph)
+
+**Don't:**
+- Use emojis
+- Use marketing language ("groundbreaking", "revolutionary")
+- Repeat information across sections
+- Include placeholder text like [TBD] - skip or note what's missing
+
+---
+
+## Section Length Targets
+
+| Section | Target |
+|---------|--------|
+| Introduction | 1-1.5 pages |
+| Background & Related Work | 1.5-2 pages |
+| Method | 2-3 pages |
+| Experiments | 2-3 pages |
+| Discussion | 1.5-2 pages |
+
+Total target: ~10 pages main content
+
+---
+
+## Citation Format
+
+Use inline citations: `[Author et al., Year]` or `[Author, Year]`
+
+Example:
+> TRM achieves 45% accuracy on ARC-AGI-1 using only 7M parameters [Jolicoeur-Martineau, 2025].
+
+Key papers (see `docs/related-work/resources.md` for full list):
+- TRM: [Jolicoeur-Martineau, 2025]
+- HRM: [Wang et al., 2025]
+- ARC benchmark: [Chollet, 2019]
+- HRM analysis: [ARC Prize Foundation, 2025]
+- LPN: [Bonnet et al., 2024]
+- VAE: [Kingma & Welling, 2014]
+- Set Transformer: [Lee et al., 2019]
+
+---
+
+## Output Format
+
+Write clean markdown with:
+- `#` for section title
+- `##` for subsections
+- `###` for sub-subsections (use sparingly)
+- Standard markdown for emphasis, lists, code blocks
+
+---
+
+## Figures, Tables, and Diagrams
+
+**You are NOT expected to create visual assets.** Instead, insert placeholders with brief descriptions. The user will create and fill them in later.
+
+**Placeholder format:**
+```
+[Figure X: Brief description of what the figure should show]
+
+[Table X: Brief description of what data the table should contain]
+
+[Diagram: Brief description of what the diagram should illustrate]
+```
+
+**Examples:**
+```
+[Figure 1: Side-by-side comparison of TRM (puzzle_id lookup) vs ETRM (encoder) architecture]
+
+[Table 1: Encoder architecture comparison showing type, layers, parameters, and aggregation method]
+
+[Diagram: Data flow showing strict train/eval separation - training demos never include eval puzzles]
+```
+
+**Guidelines:**
+- Reference placeholders in the text (e.g., "As shown in Figure 1, ...")
+- Provide enough description for the user to know what to create
+- Suggest what data/comparisons should be included in tables
+- Number figures/tables sequentially within each section
+
+---
+
+## Checklist Before Finishing
+
+- [ ] All outline points addressed
+- [ ] No [TBD] or placeholder text
+- [ ] Citations included where needed
+- [ ] Figures/tables referenced (even if not yet created)
+- [ ] Length approximately matches target
+- [ ] Reads as coherent prose (not bullet points)
