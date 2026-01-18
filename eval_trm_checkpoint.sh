@@ -123,5 +123,5 @@ eval $CMD
 echo ""
 echo "=============================================="
 echo "Evaluation complete!"
-echo "Results: ${CHECKPOINT_DIR}/eval_results_groups_${MAX_EVAL_GROUPS}.json"
+echo "Results: ${CHECKPOINT_DIR}/eval_results_groups_${MAX_EVAL_GROUPS}_step_${STEP}.json"
 echo "=============================================="

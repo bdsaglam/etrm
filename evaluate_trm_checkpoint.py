@@ -416,10 +416,12 @@ def main():
         output_dir = args.output_dir or os.path.dirname(args.checkpoint)
         os.makedirs(output_dir, exist_ok=True)
 
+        checkpoint_name = os.path.basename(args.checkpoint)
+        step_tag = checkpoint_name if checkpoint_name.startswith("step_") else "step_unknown"
         if args.max_eval_groups is None:
-            results_filename = "eval_results_full.json"
+            results_filename = f"eval_results_full_{step_tag}.json"
         else:
-            results_filename = f"eval_results_groups_{args.max_eval_groups}.json"
+            results_filename = f"eval_results_groups_{args.max_eval_groups}_{step_tag}.json"
         results_file = os.path.join(output_dir, results_filename)
         with open(results_file, "w") as f:
             json.dump({
