@@ -1,0 +1,310 @@
+"""
+Binary search for maximum batch size that fits in GPU memory.
+
+Usage:
+    # Find max batch size for ETRM with standard encoder
+    python find_batch_size.py --config-name cfg_pretrain_etrm_arc_agi_1
+
+    # Find max batch size for ETRMTRM
+    python find_batch_size.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 --model-type etrmtrm
+
+    # Custom range
+    python find_batch_size.py --config-name cfg_pretrain_etrm_arc_agi_1 --min-batch 32 --max-batch 512
+
+    # With config overrides (e.g., different encoder)
+    python find_batch_size.py --config-name cfg_pretrain_etrm_arc_agi_1 \
+        --config-overrides arch.encoder_type=lpn_var arch.encoder_num_layers=8
+"""
+
+import os
+import sys
+import gc
+import argparse
+from typing import Any, Optional
+
+import torch
+from hydra import initialize_config_dir, compose
+from hydra.core.global_hydra import GlobalHydra
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from dataset.common import PuzzleDatasetMetadata
+from models.common import load_model_class
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Find maximum batch size via binary search")
+    parser.add_argument(
+        "--config-name", type=str, required=True,
+        help="Hydra config name (e.g., cfg_pretrain_etrm_arc_agi_1)"
+    )
+    parser.add_argument(
+        "--model-type", type=str, choices=["etrm", "etrmtrm"], default="etrm",
+        help="Model type: etrm or etrmtrm"
+    )
+    parser.add_argument(
+        "--min-batch", type=int, default=1,
+        help="Minimum batch size to try (default: 1)"
+    )
+    parser.add_argument(
+        "--max-batch", type=int, default=2048,
+        help="Maximum batch size to try (default: 2048)"
+    )
+    parser.add_argument(
+        "--config-overrides", nargs="*", default=[],
+        help="Additional Hydra config overrides"
+    )
+    parser.add_argument(
+        "--forward-steps", type=int, default=2,
+        help="Number of forward steps to test (default: 2)"
+    )
+    parser.add_argument(
+        "--with-backward", action="store_true",
+        help="Also test backward pass (more memory needed)"
+    )
+    return parser.parse_args()
+
+
+def load_config(config_name: str, overrides: list) -> Any:
+    """Load Hydra config."""
+    GlobalHydra.instance().clear()
+    config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name=config_name, overrides=overrides)
+
+    return cfg
+
+
+def create_model(config: Any, model_type: str, batch_size: int):
+    """Create model with specified batch size."""
+    # Create fake metadata
+    metadata = PuzzleDatasetMetadata(
+        vocab_size=12,
+        seq_len=900,
+        num_puzzle_identifiers=1000,
+        blank_identifier_id=0,
+        sets=["test"],
+        num_groups=100,
+    )
+
+    # Build model config
+    model_cfg = dict(
+        **config.arch.__pydantic_extra__,
+        batch_size=batch_size,
+        vocab_size=metadata.vocab_size,
+        seq_len=metadata.seq_len,
+        num_puzzle_identifiers=metadata.num_puzzle_identifiers,
+        causal=False,
+    )
+
+    # Create base model
+    if model_type == "etrm":
+        from models.recursive_reasoning.etrm import TRMWithEncoder
+        base_model = TRMWithEncoder(model_cfg)
+    elif model_type == "etrmtrm":
+        from models.recursive_reasoning.etrmtrm import ETRMTRMModel
+        base_model = ETRMTRMModel(model_cfg)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    # Wrap with loss head
+    loss_head_cls = load_model_class(config.arch.loss.name)
+    model = loss_head_cls(base_model, **config.arch.loss.__pydantic_extra__)
+
+    return model
+
+
+def create_dummy_batch(batch_size: int, max_demos: int = 10, seq_len: int = 900):
+    """Create dummy batch for testing."""
+    return {
+        "inputs": torch.randint(0, 12, (batch_size, seq_len), device="cuda"),
+        "labels": torch.randint(0, 12, (batch_size, seq_len), device="cuda"),
+        "demo_inputs": torch.randint(0, 12, (batch_size, max_demos, seq_len), device="cuda"),
+        "demo_labels": torch.randint(0, 12, (batch_size, max_demos, seq_len), device="cuda"),
+        "demo_mask": torch.ones(batch_size, max_demos, dtype=torch.bool, device="cuda"),
+        "puzzle_identifiers": torch.randint(0, 1000, (batch_size,), device="cuda"),
+    }
+
+
+def try_batch_size(
+    config: Any,
+    model_type: str,
+    batch_size: int,
+    forward_steps: int,
+    with_backward: bool,
+) -> bool:
+    """Try running with given batch size. Returns True if successful."""
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    try:
+        # Create model
+        model = create_model(config, model_type, batch_size)
+        model = model.cuda()
+
+        if with_backward:
+            model.train()
+        else:
+            model.eval()
+
+        # Create dummy batch
+        max_demos = config.max_demos if hasattr(config, 'max_demos') else 10
+        batch = create_dummy_batch(batch_size, max_demos=max_demos)
+
+        # Initialize carry
+        with torch.device("cuda"):
+            carry = model.initial_carry(batch)
+
+        # Run forward passes
+        for step in range(forward_steps):
+            if with_backward:
+                carry, loss, metrics, preds, _ = model(
+                    carry=carry, batch=batch, return_keys=["preds"]
+                )
+                loss.backward()
+            else:
+                with torch.no_grad():
+                    carry, loss, metrics, preds, _ = model(
+                        carry=carry, batch=batch, return_keys=["preds"]
+                    )
+
+        # Cleanup
+        del model, batch, carry, loss, preds
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        return True
+
+    except torch.cuda.OutOfMemoryError:
+        torch.cuda.empty_cache()
+        gc.collect()
+        return False
+    except Exception as e:
+        print(f"  Error at batch_size={batch_size}: {e}")
+        torch.cuda.empty_cache()
+        gc.collect()
+        return False
+
+
+def binary_search_batch_size(
+    config: Any,
+    model_type: str,
+    min_batch: int,
+    max_batch: int,
+    forward_steps: int,
+    with_backward: bool,
+) -> int:
+    """Binary search for maximum working batch size."""
+    print(f"\nBinary searching batch size in range [{min_batch}, {max_batch}]")
+    print(f"Forward steps: {forward_steps}, With backward: {with_backward}")
+    print("-" * 50)
+
+    # First check if min works
+    print(f"Testing min batch size {min_batch}...", end=" ", flush=True)
+    if not try_batch_size(config, model_type, min_batch, forward_steps, with_backward):
+        print("FAILED")
+        return 0
+    print("OK")
+
+    # Check if max works (shortcut)
+    print(f"Testing max batch size {max_batch}...", end=" ", flush=True)
+    if try_batch_size(config, model_type, max_batch, forward_steps, with_backward):
+        print("OK")
+        return max_batch
+    print("OOM")
+
+    # Binary search
+    low, high = min_batch, max_batch
+    best = min_batch
+
+    while low <= high:
+        mid = (low + high) // 2
+
+        # Round to nice number (multiple of 8)
+        mid = (mid // 8) * 8
+        if mid < low:
+            mid = low
+        if mid > high:
+            mid = high
+
+        print(f"Testing batch size {mid}...", end=" ", flush=True)
+
+        if try_batch_size(config, model_type, mid, forward_steps, with_backward):
+            print("OK")
+            best = mid
+            low = mid + 1
+        else:
+            print("OOM")
+            high = mid - 1
+
+        # Avoid infinite loop
+        if low > high:
+            break
+
+    return best
+
+
+def main():
+    args = parse_args()
+
+    # Check CUDA
+    if not torch.cuda.is_available():
+        print("Error: CUDA not available")
+        sys.exit(1)
+
+    # GPU info
+    gpu_name = torch.cuda.get_device_name(0)
+    gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+    print("=" * 60)
+    print("Batch Size Finder")
+    print("=" * 60)
+    print(f"GPU: {gpu_name}")
+    print(f"GPU Memory: {gpu_mem:.1f} GB")
+    print(f"Config: {args.config_name}")
+    print(f"Model type: {args.model_type}")
+    print(f"Overrides: {args.config_overrides or 'none'}")
+    print("=" * 60)
+
+    # Load config
+    config = load_config(args.config_name, args.config_overrides)
+
+    # Print key config values
+    encoder_type = config.arch.__pydantic_extra__.get("encoder_type", "standard")
+    encoder_layers = config.arch.__pydantic_extra__.get("encoder_num_layers", 2)
+    print(f"Encoder type: {encoder_type}")
+    print(f"Encoder layers: {encoder_layers}")
+
+    # Binary search
+    max_batch = binary_search_batch_size(
+        config=config,
+        model_type=args.model_type,
+        min_batch=args.min_batch,
+        max_batch=args.max_batch,
+        forward_steps=args.forward_steps,
+        with_backward=args.with_backward,
+    )
+
+    print("\n" + "=" * 60)
+    print("RESULTS")
+    print("=" * 60)
+    print(f"Maximum batch size: {max_batch}")
+
+    if args.with_backward:
+        print(f"  (with backward pass)")
+    else:
+        print(f"  (forward only - training may need ~50% less)")
+
+    # Suggest global batch sizes (for 4 GPU setup)
+    print(f"\nSuggested global_batch_size for 4 GPUs:")
+    for multiplier in [1, 2, 4]:
+        suggested = (max_batch // multiplier) * 4
+        if suggested > 0:
+            print(f"  {suggested} (per-GPU: {suggested // 4})")
+
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
