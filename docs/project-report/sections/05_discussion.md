@@ -26,6 +26,8 @@ Understanding why TRM succeeds while ETRM fails requires examining how each lear
 
 The difficulty gap becomes clearer when we compare refinement mechanisms:
 
+**Table 10: Refinement mechanisms comparison**
+
 | Approach | Refinement | Feedback Signal |
 |----------|------------|-----------------|
 | TRM [trm] | Gradient descent on embedding | Ground-truth labels (supervised) |
@@ -40,6 +42,8 @@ Our ETRM-Iterative experiment tested whether iteration alone could help—it cou
 ### 5.1.3 Evidence from Cross-Sample Variance
 
 To understand the failure mechanism, we analyzed encoder outputs directly (Section 4.4.2). Cross-sample variance measures how differently the encoder responds to different puzzles:
+
+**Table 11: Cross-sample variance analysis**
 
 | Model | Cross-Sample Variance | Train Acc |
 |-------|----------------------|-----------|
@@ -61,7 +65,7 @@ Higher variance does not equal useful variance. The variational encoder produces
 
 ### 5.1.5 Qualitative Failure Modes
 
-Examination of ETRM predictions on held-out puzzles (Figure 3, Section 4.4.3) reveals several failure modes:
+Examination of ETRM predictions on held-out puzzles (Figure 6, Section 4.4.3) reveals several failure modes:
 
 1. **Collapsed outputs.** Some predictions are nearly uniform (solid color), directly reflecting encoder collapse propagating to the decoder.
 
@@ -74,6 +78,8 @@ These patterns are consistent with a model that has learned *something* about AR
 ### 5.1.6 Context for Comparison with TRM
 
 Direct comparison between TRM and ETRM requires acknowledging a fundamental difference in what each model is asked to do:
+
+**Table 12: Context for TRM/ETRM comparison**
 
 | Model | Pass@1 | Train Acc | Task |
 |-------|--------|-----------|------|

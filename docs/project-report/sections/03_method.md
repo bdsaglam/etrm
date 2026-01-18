@@ -33,6 +33,10 @@ def trm_get_context(puzzle_id):
     return puzzle_emb[puzzle_id]  # Returns (T, D) context
 ```
 
+![TRM Architecture](../assets/trm.png)
+
+**Figure 2: TRM Architecture.** Task context is obtained via embedding matrix lookup indexed by puzzle ID. The embedding matrix includes entries for both training and evaluation puzzles, limiting the model to interpolation rather than true generalization.
+
 **Critical limitation**: The embedding matrix must contain an entry for every puzzle the model will encounter. Since evaluation puzzle IDs are included in the matrix and receive gradient updates during training, TRM cannot generalize to truly unseen puzzles—it can only interpolate among puzzles in its embedding matrix.
 
 ### 3.2.2 Dual-State Recursive Reasoning
@@ -65,6 +69,10 @@ TRM uses deep supervision: the carry state $(\mathbf{y}, \mathbf{z})$ persists a
 ## 3.3 Encoder Architectures
 
 We explore three paradigms for the demonstration encoder, each embodying a different hypothesis about what makes an effective task representation.
+
+![ETRM Architecture](../assets/etrm.png)
+
+**Figure 3: ETRM Architecture.** Task context is computed from demonstration input-output pairs via a neural encoder, replacing the embedding matrix lookup. This enables generalization to novel tasks never seen during training.
 
 ### 3.3.1 Feedforward Deterministic Encoder
 
@@ -281,7 +289,7 @@ where $\mathcal{L}_{\text{CE}}$ is the cross-entropy reconstruction loss and $\b
 
 ## 3.6 Design Space Summary
 
-Table 1 summarizes the encoder architectures explored:
+**Table 3: Encoder architecture design space**
 
 | Encoder Type | Aggregation | Variational | Parameters | Key Property |
 |--------------|-------------|-------------|------------|--------------|

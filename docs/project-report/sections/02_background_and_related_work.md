@@ -7,6 +7,7 @@ The Abstraction and Reasoning Corpus (ARC) was introduced by Chollet [chollet201
 Each ARC task consists of 2-5 demonstration pairs showing an input grid and its corresponding output grid, followed by 1-2 test inputs for which the system must predict the output. Grids can be up to 30×30 cells, with each cell containing one of 10 possible values (typically rendered as colors). The demonstration pairs implicitly specify a transformation rule, and the challenge is to infer this rule and apply it correctly to novel test inputs. Figure 1 shows an example task where the rule involves extracting and recoloring a shape.
 
 ![Figure 1: Example ARC puzzles](../assets/arc-puzzles.png)
+**Figure 1: Example ARC puzzles.** Each task shows 2-5 demonstration pairs and test inputs requiring the model to infer and apply the transformation rule.
 
 What makes ARC particularly challenging is twofold. First, every task follows a different underlying logic—there is no single algorithm that solves all tasks. Second, compute efficiency is an explicit goal: competition submissions must operate within fixed hardware constraints and capped time budgets, preventing brute-force scaling as a solution strategy. Chollet posits that solving ARC requires only "core knowledge priors" that humans possess innately: objectness and elementary physics (cohesion, persistence), goal-directedness, basic numerics, and elementary geometry and topology [chollet2019].
 
@@ -104,6 +105,4 @@ Table 2 summarizes these distinctions.
 | Test-time optimization | No | Yes (gradient ascent) | No |
 | Can generalize to unseen tasks | No | Yes | Yes (goal) |
 
-![Figure 2: ETRM architecture showing encoder replacing puzzle_id embedding](../assets/etrm.png)
-
-ETRM thus combines the strengths of both approaches: LPN's ability to compute task representations from demonstrations (enabling generalization) with TRM's efficient recursive search (avoiding test-time optimization). Our research question is whether this combination preserves TRM's reasoning capabilities while enabling true few-shot generalization to puzzles never seen during training.
+ETRM thus combines the strengths of both approaches: LPN's ability to compute task representations from demonstrations (enabling generalization) with TRM's efficient recursive search (avoiding test-time optimization). As shown in Figures 2-3, ETRM replaces TRM's puzzle_id embedding lookup with an encoder that processes demonstration pairs, enabling true few-shot generalization to puzzles never seen during training.

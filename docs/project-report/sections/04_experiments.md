@@ -17,7 +17,12 @@ The same augmentation is applied consistently to all components of a puzzle (dem
 
 **Critical Distinction: True Few-Shot Evaluation.** A key difference between ETRM and TRM evaluation lies in data separation. In TRM, evaluation puzzle identifiers exist in the embedding matrix and receive gradient updates during training—the model has effectively "seen" these puzzles [hrm-analysis]. In ETRM, we enforce strict separation: evaluation puzzle demonstrations are *never* seen during training. The encoder must extract transformation rules from demonstrations it encounters for the first time at test time. This is true few-shot evaluation.
 
-[Table 1: Dataset split summary showing training puzzles (~560 groups), evaluation puzzles (~400 groups), augmentation factor (~1000x), and total samples]
+**Table 4: Dataset split summary**
+
+| Split | Puzzle Groups | Augmentation Factor | Total Samples | Use |
+|-------|--------------|---------------------|---------------|-----|
+| Training | ~560 (training + concept) | ~1000x | ~560,000 | Model training |
+| Evaluation | ~400 (evaluation) | ~1000x | ~400,000 | True few-shot testing |
 
 ### 4.1.2 Evaluation Protocol
 
@@ -33,7 +38,17 @@ The same augmentation is applied consistently to all components of a puzzle (dem
 
 **Hyperparameters.** We use batch size 256 for deterministic and iterative encoders, reduced to 128 for Cross-Attention VAE due to memory constraints. ACT maximum steps is set to 16 with exploration probability 0.5. Following Section 3.5.3, we re-encode the full batch at every ACT step to ensure adequate gradient flow to the encoder.
 
-[Table 2: Training hyperparameters for each encoder variant]
+**Table 5: Training hyperparameters**
+
+| Parameter | Deterministic | Variational | Iterative |
+|-----------|--------------|-------------|-----------|
+| Batch size | 256 | 128 | 256 |
+| Learning rate | 1e-4 | 1e-4 | 1e-4 |
+| ACT max steps | 16 | 16 | 16 |
+| Exploration prob | 0.5 | 0.5 | 0.5 |
+| Grad clip norm | 1.0 | 1.0 | 1.0 |
+| Re-encode batch | Yes | Yes | Yes |
+| Decoder frozen | No | No | No |
 
 ### 4.1.4 Computational Resources
 
@@ -42,6 +57,8 @@ All experiments were conducted on a server with 4 NVIDIA A100 80GB GPUs. Trainin
 ## 4.2 TRM Baseline
 
 We first reproduce TRM training to establish a baseline for comparison. Results at two checkpoints:
+
+**Table 6: TRM baseline results**
 
 | Model | Params | Pass@1 | Pass@2 | Pass@5 | Train Acc | Steps |
 |-------|--------|--------|--------|--------|-----------|-------|
@@ -54,6 +71,8 @@ At 155k steps—comparable to our ETRM training duration—TRM achieves 37.38% P
 
 We evaluate three encoder architectures from Section 3.3, each embodying a different hypothesis about effective task representation:
 
+**Table 7: ETRM results**
+
 | Model | Encoder Type | Params | Pass@1 | Pass@2 | Pass@5 | Train Acc | Steps |
 |-------|--------------|--------|--------|--------|--------|-----------|-------|
 | ETRM-Deterministic | Feedforward Deterministic (Section 3.3.1) | 22M | 0.00% | 0.50% | 0.50% | 78.91% | 175k |
@@ -64,7 +83,7 @@ We evaluate three encoder architectures from Section 3.3, each embodying a diffe
 
 **Architecture-Agnostic Failure.** The failure is consistent across fundamentally different encoder designs: feedforward deterministic, variational with KL regularization, and iterative with joint refinement. This suggests the problem is fundamental to the encoder-based approach rather than a matter of architectural choice.
 
-**Summary Comparison at Comparable Training Time:**
+**Table 8: Summary comparison at comparable training time**
 
 | Model | Approach | Params | Pass@1 | Pass@2 | Pass@5 | Train Acc |
 |-------|----------|--------|--------|--------|--------|-----------|
@@ -77,9 +96,11 @@ We evaluate three encoder architectures from Section 3.3, each embodying a diffe
 
 ### 4.4.1 Training Dynamics
 
-![Figure 1: Training accuracy over time for TRM and ETRM variants](../assets/training_curves.png)
+![Figure 4: Training accuracy over time for TRM and ETRM variants](../assets/training_curves.png)
 
-Figure 1 shows training accuracy over time. TRM (dashed line) reaches 98% accuracy and continues improving throughout training. In contrast, ETRM variants plateau at substantially lower accuracies: the Feedforward Deterministic encoder reaches 79%, the Iterative encoder plateaus around 51%, and the Cross-Attention VAE struggles to exceed 41%.
+**Figure 4: Training accuracy over time for TRM and ETRM variants.** TRM (dashed line) reaches 98% accuracy and continues improving. ETRM variants plateau at lower accuracies: Feedforward Deterministic (79%), Iterative (51%), Cross-Attention VAE (41%).
+
+Figure 4 shows training accuracy over time. TRM (dashed line) reaches 98% accuracy and continues improving throughout training. In contrast, ETRM variants plateau at substantially lower accuracies: the Feedforward Deterministic encoder reaches 79%, the Iterative encoder plateaus around 51%, and the Cross-Attention VAE struggles to exceed 41%.
 
 The training accuracy gap between TRM and ETRM-Deterministic (92% vs 79% at comparable steps) already indicates that the encoder-based approach faces optimization challenges. However, the more striking observation is the complete disconnect between training and test performance for ETRM—79% training accuracy translates to 0% test accuracy.
 
@@ -87,7 +108,11 @@ The training accuracy gap between TRM and ETRM-Deterministic (92% vs 79% at comp
 
 To understand the 0% test accuracy, we analyze the encoder outputs directly. We measure cross-sample variance: how different are encoder outputs across different puzzles?
 
-![Figure 2: Encoder output statistics showing cross-sample variance, within-sample variance, and output distributions](../assets/encoder_collapse.png)
+![Figure 5: Encoder output statistics showing cross-sample variance, within-sample variance, and output distributions](../assets/encoder_collapse.png)
+
+**Figure 5: Encoder output statistics.** Analysis of cross-sample variance, within-sample variance, and output distributions reveals encoder collapse across all variants.
+
+**Table 9: Encoder collapse analysis**
 
 | Model | Cross-Sample Variance | Interpretation |
 |-------|----------------------|----------------|
@@ -103,9 +128,11 @@ The Feedforward Deterministic encoder shows cross-sample variance of only 0.36, 
 
 ### 4.4.3 Qualitative Examples
 
-![Figure 3: Predictions on held-out puzzles showing Input, Ground Truth, ETRM-Deterministic prediction, and TRM prediction for 3-4 example puzzles](../assets/qualitative_combined.png)
+![Figure 6: Predictions on held-out puzzles showing Input, Ground Truth, ETRM-Deterministic prediction, and TRM prediction for 3-4 example puzzles](../assets/qualitative_combined.png)
 
-Figure 3 shows qualitative predictions on held-out evaluation puzzles. ETRM produces structured outputs—not random noise—but applies incorrect transformations. For example, where the ground truth requires a rotation operation, ETRM might produce a color-filling pattern unrelated to the demonstrated rule. This is consistent with encoder collapse: the decoder has learned *some* transformation behavior, but without puzzle-specific context, it cannot select the correct transformation.
+**Figure 6: Predictions on held-out puzzles.** ETRM produces structured outputs but applies incorrect transformations (left columns), while TRM produces correct predictions (right columns). This is consistent with encoder collapse preventing task-specific context from reaching the decoder.
+
+Figure 6 shows qualitative predictions on held-out evaluation puzzles. ETRM produces structured outputs—not random noise—but applies incorrect transformations. For example, where the ground truth requires a rotation operation, ETRM might produce a color-filling pattern unrelated to the demonstrated rule. This is consistent with encoder collapse: the decoder has learned *some* transformation behavior, but without puzzle-specific context, it cannot select the correct transformation.
 
 In contrast, TRM (which has embeddings for these puzzles) produces predictions that match or closely approximate the ground truth, demonstrating that the decoder architecture is capable of solving these puzzles given appropriate task context.
 

@@ -14,15 +14,7 @@ This means transformation rules are memorized in embedding weights during traini
 
 ## 1.3 Research Question
 
-This project asks: **Can we replace task-specific embeddings with an encoder that extracts transformation rules directly from demonstration pairs at test time?** Such an approach would enable true few-shot generalization to novel tasks never seen during training—the original intent of the ARC benchmark.
-
-![TRM Architecture](../assets/trm.png)
-**(a) TRM**: Task representation from learned puzzle ID embedding lookup.
-
-![ETRM Architecture](../assets/etrm.png)
-**(b) ETRM**: Task representation from encoder processing demonstration pairs.
-
-**Figure 1**: Comparison of TRM and ETRM architectures. TRM retrieves a learned embedding for each puzzle ID, requiring the model to have seen the task during training. ETRM replaces this with an encoder that processes demonstration pairs, enabling inference on novel tasks.
+This project asks: **Can we replace task-specific embeddings with an encoder that extracts transformation rules directly from demonstration pairs at test time?** Such an approach would enable true few-shot generalization to novel tasks never seen during training—the original intent of the ARC benchmark. The architectural comparison between TRM's embedding-based approach and our encoder-based approach is illustrated in Section 3.
 
 ## 1.4 Contributions
 
@@ -46,7 +38,3 @@ Our results are primarily negative but informative:
 - Iterative encoding (ETRM-TRM) also fails, indicating the problem is not simply insufficient computation but the absence of a feedback signal during refinement.
 
 These results highlight a fundamental asymmetry: TRM refines each puzzle embedding over hundreds of thousands of gradient updates during training, while we ask the encoder to extract equivalent information in a single forward pass with no task-specific supervision. The most promising path forward appears to be adding test-time optimization with self-supervised signals, as demonstrated by Latent Program Networks [lpn].
-
-## 1.6 Code Availability
-
-Our implementation is available at https://github.com/bdsaglam/TinyRecursiveModels, a fork of the original TRM repository with encoder-based modifications.
