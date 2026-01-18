@@ -1,0 +1,5 @@
+run_id,run_name,state,created_at,ARC/pass@1,ARC/pass@2,ARC/pass@5,ARC/pass@10,ARC/pass@100,ARC/pass@1000,train/exact_accuracy,_step,_runtime,encoder_type,encoder_num_layers,epochs,global_batch_size,max_eval_groups,max_train_groups,kl_weight
+z31hae14,F1_standard,finished,2026-01-15T21:00:07Z,0.0,0.005,0.005,0.005,0.005,0.0075,0.7890625,174622,95286.127706414,standard,2,50000,256,32,,0.0001
+7km7llbl,F2_hybrid_var,finished,2026-01-17T02:10:27Z,0.0,0.0,0.0,0.0,0.0,0.0,0.40625,174240,82114.666996916,hybrid_variational,4,25000,128,32,,0.0001
+wj3xu8md,F3_etrmtrm,finished,2026-01-18T00:59:29Z,0.0,0.0025,0.0025,0.0025,0.0025,0.0025,0.51171875,87310,26121.732931611,standard,2,25000,256,32,,0.0001
+d8fm7k3u,F4_lpn_var,running,2026-01-18T08:15:19Z,,,,,,,0.36328125,6379,23144.63520904,lpn_var,2,25000,256,32,,0.0001

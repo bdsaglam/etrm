@@ -1,4 +1,4 @@
-- ARC-AGI 2 benchmark
-- LPN style gradient-based optimization in latent space + TRM
+- Use pretrained TRM with all weights to initialize decoder and repeat training runs
 - Contrastive loss for encoder: encourage encoder to produce similar representations for demos from SAME puzzle and different representations for demos from DIFFERENT puzzles
-- 
+- LPN style gradient-based optimization in latent space + TRM
+- ARC-AGI 2 benchmark

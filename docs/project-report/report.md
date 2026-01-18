@@ -23,17 +23,11 @@
 
 ## Figures
 
-| Figure | Description | Status |
-|--------|-------------|--------|
-| Figure 1 | TRM vs ETRM approach comparison | TODO |
-| Figure 2 | TRM architecture diagram | TODO |
-| Figure 3 | Puzzle_id vs encoder diagram | TODO |
-| Figure 4 | ETRM full pipeline | TODO |
-| Figure 5 | Encoder architecture comparison | TODO |
-| Figure 6 | Gradient flow (re-encoding vs caching) | TODO |
-| Figure 7 | Training curves | TODO |
-| Figure 8 | Architecture comparison bar chart | TODO |
-| Figure 9 | Example predictions | TODO |
+| Description | Status |
+|-------------|--------|
+| TRM vs ETRM approach comparison | TODO |
+| Training curves | TODO |
+| Example predictions | TODO |
 
 ## Tables
 
@@ -42,7 +36,6 @@
 | Table 1 | Encoder architecture comparison (params) | TODO |
 | Table 2 | Semi-final results | TODO |
 | Table 3 | Final results | TODO |
-| Table 4 | Ablation study results | TODO |
 
 ---
 

@@ -299,6 +299,11 @@ def load_pretrained_decoder(model: nn.Module, checkpoint_path: str, rank: int = 
 
     Missing (expected):
     - encoder.* (only in TRMWithRecurrentEncoder, initialized randomly)
+
+    Handles prefix differences:
+    - Strips _orig_mod. prefix from checkpoint if present
+    - Strips module. prefix from checkpoint if present (DDP)
+    - Adds _orig_mod. prefix if model is compiled but checkpoint isn't
     """
     if rank == 0:
         print(f"\n{'='*60}")
@@ -306,6 +311,27 @@ def load_pretrained_decoder(model: nn.Module, checkpoint_path: str, rank: int = 
         print(f"{'='*60}")
 
     state_dict = torch.load(checkpoint_path, map_location="cuda", weights_only=True)
+
+    # Normalize checkpoint keys by stripping common prefixes
+    if any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+        if rank == 0:
+            print("Stripping _orig_mod. prefix from checkpoint keys")
+        state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+
+    if any(k.startswith("module.") for k in state_dict.keys()):
+        if rank == 0:
+            print("Stripping module. prefix from checkpoint keys (DDP)")
+        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+
+    # Check if model expects _orig_mod prefix (compiled model)
+    model_keys = set(model.state_dict().keys())
+    model_has_orig_mod = any(k.startswith("_orig_mod.") for k in model_keys)
+
+    # Add _orig_mod prefix to checkpoint keys if model is compiled but checkpoint isn't
+    if model_has_orig_mod and not any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+        if rank == 0:
+            print("Adding _orig_mod. prefix to checkpoint keys (model is compiled)")
+        state_dict = {f"_orig_mod.{k}": v for k, v in state_dict.items()}
 
     # Filter out puzzle_emb (incompatible with encoder mode)
     filtered = {}
@@ -329,7 +355,9 @@ def load_pretrained_decoder(model: nn.Module, checkpoint_path: str, rank: int = 
         encoder_missing = [k for k in result.missing_keys if ".encoder." in k]
 
         if inner_missing:
-            print(f"WARNING: Inner model keys not loaded: {inner_missing}")
+            print(f"WARNING: Inner model keys not loaded: {inner_missing[:5]}...")
+            if len(inner_missing) > 5:
+                print(f"  ... and {len(inner_missing) - 5} more")
         else:
             print(f"All inner model (decoder) keys loaded successfully")
 

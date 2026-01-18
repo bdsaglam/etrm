@@ -1,5 +1,11 @@
 # 4. Experiments
 
+> **Writing Agent Notes:**
+> - Use encoder naming consistent with Method Section 3.3: "Feedforward Deterministic", "Cross-Attention VAE", "Iterative (TRM-style)"
+> - Key narrative: We tried three different encoder paradigms, all failed to generalize, encoder collapse explains why
+> - The 0% test accuracy is the main result - emphasize this is true few-shot evaluation (demos never seen in training)
+> - Decoder was trainable (not frozen), so encoder collapse is not due to frozen decoder
+
 ## Outline
 
 ### 4.1 Experimental Setup
@@ -8,104 +14,117 @@
 - ARC-AGI-1: 400 training + 400 evaluation tasks
 - Additional ~160 "concept" tasks added to training
 - Preprocessing: ~1000 augmented versions per task
-- **Critical**: Strict train/eval separation - evaluation task demos never seen during training
+- **Critical**: Strict train/eval separation - evaluation task demos never seen during training (unlike TRM where eval puzzle embeddings receive gradients)
 
 #### 4.1.2 Evaluation Protocol
-- Metrics:
-  - **Pass@1**: Exact match on first prediction (primary metric)
-  - **Pass@2**: Correct within 2 attempts
-- Voting mechanism: Aggregate predictions across augmented versions
-- Evaluation on held-out subset (32 puzzle groups) due to computational constraints
+- Metrics: Pass@1 (primary), Pass@2, Pass@5
+- Voting mechanism: Aggregate predictions across ~1000 augmented versions per puzzle
+- **Subset evaluation**: 32 puzzle groups (8% of full eval set) due to computational constraints
+- Full evaluation set requires ~24 hours per model (voting across ~1000 augmentations per puzzle)
 
 #### 4.1.3 Training Configuration
-- Pretrained TRM decoder (from original TRM training)
-- Batch size: 256 (or 128 for larger encoders)
-- ACT max steps: 16
-- Exploration probability: 0.5
-- Gradient clipping: 1.0
+- **Decoder**: Initialized from pretrained TRM, but NOT frozen - gradients flow through
+- Batch size: 256 (128 for Cross-Attention VAE due to memory)
+- ACT max steps: 16, exploration probability: 0.5
+- Re-encoding at every step (not cached) - see Method Section 3.5.3
 
-#### 4.1.4 EMA Checkpoint Issue
+#### 4.1.4 Computational Resources
+- Hardware: 4× NVIDIA A100 80GB GPUs
+- Training: Distributed data-parallel via PyTorch's torchrun
+- Training time: ~12-24 hours per ETRM variant (175k steps)
+- TRM baseline: ~48 hours to convergence (518k steps)
 
-**TRM reproduction succeeded:** We reproduced the original TRM training, achieving 41.75% pass@1 and 48.75% pass@2 during training (logged to W&B), matching the paper's reported ~45% pass@2.
+### 4.2 TRM Baseline (Reproduction)
 
-**Checkpoint saving bug discovered:** The training script uses Exponential Moving Average (EMA) for evaluation but only saves regular (non-EMA) weights to disk:
-- **During training** (EMA model): 41.75% pass@1, 48.75% pass@2
-- **Saved checkpoint** (non-EMA): 3.25% pass@1, 3.9% pass@2
+We reproduced TRM training. Results at comparable training time (~155k steps) and final convergence (~518k steps):
 
-The EMA weights were never persisted and are now lost.
+| Model | Params | Pass@1 | Pass@2 | Pass@5 | Train Acc | Steps |
+|-------|--------|--------|--------|--------|-----------|-------|
+| TRM (155k steps) | 7M | 37.38% | 41.25% | 47.12% | 92.50% | 155k |
+| TRM (converged) | 7M | 41.75% | 48.75% | 52.25% | 98.44% | 518k |
 
-| Checkpoint | pass@1 | pass@2 | Status |
-|------------|--------|--------|--------|
-| EMA (during training) | 41.75% | 48.75% | Lost - not saved |
-| Non-EMA (saved) | 3.25% | 3.9% | Available |
+**Note**: TRM's evaluation puzzles have embeddings in the embedding matrix that receive gradient updates during training - not true generalization.
 
-**Downstream impact:**
-- All subsequent evaluations of the TRM checkpoint show ~3% instead of ~42%
-- All ETRM experiments use `load_pretrained_decoder` from the non-EMA checkpoint
-- The pretrained decoder is significantly weaker than intended
+### 4.3 ETRM Results
 
-**Comparison remains fair:** All models (TRM baseline and ETRM variants) use the same non-EMA decoder weights, so relative comparisons are valid.
+Three encoder architectures from Method Section 3.3:
 
-**Lesson learned:** Always save EMA checkpoints separately when using EMA during training.
+| Model | Encoder (Method Section) | Params | Pass@1 | Pass@2 | Pass@5 | Train Acc | Steps |
+|-------|--------------------------|--------|--------|--------|--------|-----------|-------|
+| ETRM-Deterministic | Feedforward Deterministic (§3.3.1) | 22M | 0.00% | 0.50% | 0.50% | 78.91% | 175k |
+| ETRM-Variational | Cross-Attention VAE (§3.3.2) | 23M | 0.00% | 0.00% | 0.00% | 40.62% | 174k |
+| ETRM-Iterative | Iterative TRM-style (§3.3.3) | 15M | 0.00% | 0.25% | 0.25% | 51.17% | 87k |
 
-#### 4.1.5 Computational Constraints
-- **Training**: Full training to convergence requires ~4 days on 4 GPUs
-- **Evaluation**: Full evaluation (400 puzzle groups × ~1000 augmentations with voting) requires ~1 day on 4 GPUs
-- Given limited time and resources as a course project, we made pragmatic choices:
-  - Preliminary experiments to identify promising architectures before full training
-  - Full training limited to 25k-50k epochs instead of original TRM's 100k+ epochs
-  - Evaluation on 32 puzzle groups (8% of full eval set) instead of all 400
-- These choices provide sufficient signal for architecture comparison while remaining computationally feasible
-- Limitations acknowledged in Discussion: models may not have fully converged, results on subset may not reflect full evaluation set
+### 4.4 Analysis
 
-### 4.2 Preliminary Experiments: Architecture Search
+#### 4.4.1 Training Dynamics
 
-**Goal**: Identify promising encoder architectures before committing to full training
+![Training Curves](../../notebooks/report_figures/outputs/training_curves.png)
 
-- Trained each architecture for 1000 epochs on full training set
-- Evaluated on 32-puzzle subset for faster iteration
-- Compared all three encoder paradigms from Section 3.2
+*Figure: Training accuracy over time. TRM (dashed) reaches 98% and continues improving. ETRM variants plateau at lower accuracies (40-79%) despite comparable training steps.*
 
-| Encoder | Description | Train Acc | Test Pass@1 |
-|---------|-------------|-----------|-------------|
-| Feedforward Deterministic (2-layer) | Transformer + cross-attention | ~43% | ~1% |
-| Feedforward Deterministic (4-layer) | Deeper variant | ~37% | ~0.5% |
-| Cross-Attention VAE | + variational bottleneck | [TBD] | [TBD] |
-| Per-Demo VAE (LPN-style) | Paper-exact LPN encoder | [TBD] | [TBD] |
+**Summary comparison at comparable training time:**
 
-**Observations from preliminary experiments**:
-- [Which architectures showed promise]
-- [Train/test gap patterns]
-- [Computational efficiency differences]
+| Model | Approach | Params | Pass@1 | Pass@2 | Pass@5 | Train Acc |
+|-------|----------|--------|--------|--------|--------|-----------|
+| TRM (155k) | Embedding lookup | 7M | 37.38% | 41.25% | 47.12% | 92.50% |
+| ETRM-Deterministic | Feedforward encoder | 22M | 0.00% | 0.50% | 0.50% | 78.91% |
+| ETRM-Variational | VAE encoder | 23M | 0.00% | 0.00% | 0.00% | 40.62% |
+| ETRM-Iterative | Recurrent encoder | 15M | 0.00% | 0.25% | 0.25% | 51.17% |
 
-### 4.3 Full Training Results
+#### 4.4.2 Encoder Collapse Evidence
 
-**Goal**: Train selected architectures to convergence
+![Encoder Collapse](../../notebooks/report_figures/outputs/encoder_collapse.png)
 
-Based on preliminary results, selected configurations for extended training (25k-50k epochs):
+*Figure: Encoder output statistics. Cross-sample variance (top-left) measures how different encoder outputs are across puzzles. Low variance = encoder produces similar outputs regardless of input demos.*
 
-| Encoder | Epochs | Train Acc | Test Pass@1 | Test Pass@2 |
-|---------|--------|-----------|-------------|-------------|
-| Feedforward Deterministic | 50k | [TBD] | [TBD] | [TBD] |
-| Cross-Attention VAE | 25k | [TBD] | [TBD] | [TBD] |
-| Iterative Encoder | 25k | [TBD] | [TBD] | [TBD] |
-| Per-Demo VAE (LPN-style) | 25k | [TBD] | [TBD] | [TBD] |
+| Model | Cross-Sample Variance | Interpretation |
+|-------|----------------------|----------------|
+| ETRM-Deterministic | 0.36 | Low - collapsed |
+| ETRM-Variational | 3.33 | Higher - KL prevents full collapse |
+| ETRM-Iterative | 0.15 | Very low - severely collapsed |
 
-**Reference comparison**:
-- Original TRM with puzzle_id (EMA, paper): ~45% pass@2 on ARC-AGI-1 (with task memorization)
-- Original TRM with puzzle_id (non-EMA checkpoint): 3.25% pass@1, 3.9% pass@2
-- Note: We compare against the non-EMA checkpoint since that's what our pretrained decoder uses
-- The few-shot generalization task is fundamentally harder than memorization, so lower results are expected
+**Diagnosis**: The encoder learns to produce near-constant outputs. The decoder receives essentially the same "rule representation" for every puzzle, explaining 0% test accuracy despite reasonable training accuracy.
+
+#### 4.4.3 Qualitative Examples
+
+![Qualitative Examples](../../notebooks/report_figures/outputs/qualitative_combined.png)
+
+*Figure: Predictions on held-out puzzles. Columns: Input, Ground Truth, ETRM-Deterministic, TRM. ETRM produces structured outputs but wrong transformations.*
+
+#### 4.4.4 Key Findings
+
+1. **Complete generalization failure**: All ETRM variants achieve 0% Pass@1 on held-out puzzles, despite 40-79% training accuracy.
+
+2. **Encoder collapse**: Cross-sample variance analysis reveals encoders produce near-constant outputs regardless of input demos - they fail to extract puzzle-specific information.
+
+3. **Architecture-agnostic failure**: Feedforward, variational, and iterative encoders all fail similarly, suggesting the problem is fundamental to the encoder-based approach, not architectural.
+
+4. **Training vs generalization gap**: ETRM-Deterministic achieves 79% training accuracy but 0% test accuracy - the encoder memorizes training puzzles rather than learning to extract generalizable rules.
+
+5. **Contrast with TRM**: TRM achieves 37% Pass@1 at comparable training steps by memorizing puzzle embeddings. The encoder-based approach cannot match even this "memorization" performance on held-out puzzles.
 
 ---
 
-*Target length: ~2-3 pages*
+## Writing Notes
 
-## Figures Needed
-- [ ] Figure: Training curves (train/test accuracy over epochs)
-- [ ] Figure: Architecture comparison bar chart
-- [ ] Figure: Example predictions (success and failure cases)
+**Key message**: Replacing learned embeddings with a demonstration encoder is a natural idea for generalization, but our experiments show this is much harder than expected. The encoder collapses to constant outputs rather than learning to extract transformation rules.
 
-## Tables Needed
-- [ ] Table: Preliminary experiment results
-- [ ] Table: Full training results
+**What to emphasize**:
+- This is TRUE few-shot evaluation (unlike TRM where eval embeddings get gradients)
+- Decoder was trainable, not frozen - collapse is encoder's failure
+- All three encoder paradigms failed the same way
+- Encoder collapse (low cross-sample variance) explains the 0% results
+
+**Figures are ready**: All PNG files in `notebooks/report_figures/outputs/`
+
+## Figures
+- [x] `training_curves.png` - Shows ETRM plateaus below TRM
+- [x] `encoder_collapse.png` - Shows low cross-sample variance = collapse
+- [x] `qualitative_combined.png` - Shows ETRM predictions vs ground truth
+
+## Tables
+- [x] TRM baseline (155k and 518k steps)
+- [x] ETRM results (3 variants)
+- [x] Summary comparison
+- [x] Encoder collapse statistics

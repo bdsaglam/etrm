@@ -1,0 +1,7 @@
+run_id,run_name,state,created_at,ARC/pass@1,ARC/pass@2,ARC/pass@5,ARC/pass@10,ARC/pass@100,ARC/pass@1000,train/exact_accuracy,_step,_runtime,encoder_type,encoder_num_layers,epochs,global_batch_size,max_eval_groups,max_train_groups,kl_weight
+q1aiaebp,VKL1_lpn_var_kl0.001,killed,2026-01-11T19:33:44Z,,,,,,,0.0,2500,7197.206116109,lpn_variational,6,20000,128,,32,0.001
+lwtyaslc,VKL1_lpn_var_kl0.0001_lpn_paper,finished,2026-01-11T21:35:51Z,0.0,0.0,0.0,0.0,0.0,0.0,0.015625,5000,10469.584030354,lpn_variational,6,20000,128,32.0,32,0.0001
+7if3tij0,VKL2_lpn_var_kl0.001,finished,2026-01-12T00:30:37Z,0.0,0.0,0.0,0.0,0.0,0.0,0.0,5000,10493.663737219,lpn_variational,6,20000,128,32.0,32,0.001
+6pvishrq,VKL5_hybrid_var_kl0.0001_lpn_paper,finished,2026-01-12T03:25:48Z,0.0,0.0,0.0,0.0,0.0,0.0,0.0,5000,7814.898176823,hybrid_variational,4,20000,128,32.0,32,0.0001
+8hphevom,VKL0_standard_control,finished,2026-01-12T05:36:19Z,0.0,0.0,0.0,0.0,0.0,0.0,0.0390625,2500,4791.95162719,standard,2,20000,256,32.0,32,0.0
+s14dc52v,VKL6_lpn_var_kl1e-5,finished,2026-01-12T07:36:51Z,0.0,0.0,0.0,0.0,0.0,0.0,0.0,5000,7748.853365943,lpn_variational,6,20000,128,32.0,32,1e-05
