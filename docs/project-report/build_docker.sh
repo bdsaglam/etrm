@@ -13,7 +13,7 @@ docker run --rm \
     -v "$REPO_DIR":/workspace \
     -w /workspace \
     "$IMAGE_NAME" \
-    /bin/bash -lc "python3 docs/project-report/build_report.py"
+    /bin/sh -c "python3 docs/project-report/build_report.py"
 
 echo ""
 echo "==> Done! Output: $SCRIPT_DIR/report.pdf"
