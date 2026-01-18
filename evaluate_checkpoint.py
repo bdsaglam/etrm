@@ -65,7 +65,11 @@ def parse_args():
     )
     parser.add_argument(
         "--batch-size", type=int, default=None,
-        help="Evaluation batch size (default: from config)"
+        help="Evaluation global batch size (deprecated; use --global-batch-size)"
+    )
+    parser.add_argument(
+        "--global-batch-size", type=int, default=None,
+        help="Evaluation global batch size (default: from config)"
     )
     parser.add_argument(
         "--output-dir", type=str, default=None,
@@ -89,15 +93,26 @@ def load_config(config_name: str, overrides: list) -> Any:
     return cfg
 
 
+def _get_config_extras(cfg: Any, drop_keys: Optional[set[str]] = None) -> Dict[str, Any]:
+    """Extract extra fields from either Pydantic or OmegaConf configs."""
+    if hasattr(cfg, "__pydantic_extra__") and cfg.__pydantic_extra__ is not None:
+        extras = dict(cfg.__pydantic_extra__)
+    else:
+        extras = OmegaConf.to_container(cfg, resolve=True)
+        extras = dict(extras) if isinstance(extras, dict) else {}
+
+    for key in drop_keys or set():
+        extras.pop(key, None)
+
+    return extras
+
+
 def create_dataloader(config: Any, rank: int, world_size: int, max_eval_groups: Optional[int], batch_size: Optional[int] = None):
     """Create evaluation dataloader."""
     data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
 
-    # Use provided batch_size as per-GPU, or fall back to config
-    if batch_size is not None:
-        global_batch_size = batch_size * world_size
-    else:
-        global_batch_size = config.global_batch_size
+    # Use provided batch_size as global batch size, or fall back to config
+    global_batch_size = batch_size if batch_size is not None else config.global_batch_size
 
     dataset = FewShotPuzzleDataset(
         FewShotPuzzleDatasetConfig(
@@ -128,12 +143,13 @@ def create_dataloader(config: Any, rank: int, world_size: int, max_eval_groups: 
 
 def create_model(config: Any, metadata: PuzzleDatasetMetadata, model_type: str, world_size: int, batch_size: Optional[int] = None):
     """Create model with loss head wrapper."""
-    # Use provided batch_size as per-GPU, or fall back to config
-    per_gpu_batch_size = batch_size if batch_size is not None else config.global_batch_size // world_size
+    # Use provided batch_size as global batch size, or fall back to config
+    global_batch_size = batch_size if batch_size is not None else config.global_batch_size
+    per_gpu_batch_size = global_batch_size // world_size
 
     # Build model config
     model_cfg = dict(
-        **config.arch.__pydantic_extra__,
+        **_get_config_extras(config.arch, drop_keys={"name", "loss"}),
         batch_size=per_gpu_batch_size,
         vocab_size=metadata.vocab_size,
         seq_len=metadata.seq_len,
@@ -153,7 +169,8 @@ def create_model(config: Any, metadata: PuzzleDatasetMetadata, model_type: str, 
 
     # Wrap with loss head
     loss_head_cls = load_model_class(config.arch.loss.name)
-    model = loss_head_cls(base_model, **config.arch.loss.__pydantic_extra__)
+    loss_kwargs = _get_config_extras(config.arch.loss, drop_keys={"name"})
+    model = loss_head_cls(base_model, **loss_kwargs)
 
     return model
 
@@ -165,14 +182,16 @@ def load_checkpoint(model: torch.nn.Module, checkpoint_path: str, rank: int):
 
     state_dict = torch.load(checkpoint_path, map_location="cuda", weights_only=True)
 
-    # Handle DDP wrapped models
+    # Handle torch.compile and DDP wrapped models
+    if any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+        state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
     if any(k.startswith("module.") for k in state_dict.keys()):
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
 
     model.load_state_dict(state_dict, strict=True)
 
     if rank == 0:
-        print(f"Checkpoint loaded successfully")
+        print("Checkpoint loaded successfully")
 
 
 def evaluate_model(
@@ -182,6 +201,7 @@ def evaluate_model(
     evaluator: ARC,
     rank: int,
     world_size: int,
+    autocast_dtype: Optional[torch.dtype] = None,
 ) -> Dict[str, float]:
     """Run evaluation loop."""
     model.eval()
@@ -202,20 +222,19 @@ def evaluate_model(
             # Move batch to GPU
             batch = {k: v.cuda() for k, v in batch.items()}
 
-            # Initialize carry
-            with torch.device("cuda"):
-                carry = model.initial_carry(batch)
+            with torch.autocast(device_type="cuda", dtype=autocast_dtype) if autocast_dtype else torch.inference_mode():
+                # Initialize carry
+                with torch.device("cuda"):
+                    carry = model.initial_carry(batch)
 
-            # Forward until all halt
-            inference_steps = 0
-            while True:
-                carry, loss, metrics, preds, all_finish = model(
-                    carry=carry, batch=batch, return_keys=return_keys
-                )
-                inference_steps += 1
+                # Forward until all halt
+                while True:
+                    carry, loss, metrics, preds, all_finish = model(
+                        carry=carry, batch=batch, return_keys=return_keys
+                    )
 
-                if all_finish:
-                    break
+                    if all_finish:
+                        break
 
             # Update evaluator
             evaluator.update_batch(batch, preds)
@@ -234,6 +253,8 @@ def evaluate_model(
 
 def main():
     args = parse_args()
+    if args.global_batch_size is None:
+        args.global_batch_size = args.batch_size
 
     # Initialize distributed if needed
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -250,34 +271,34 @@ def main():
 
     if rank == 0:
         print(f"\n{'=' * 60}")
-        print(f"ETRM/ETRMTRM Checkpoint Evaluation")
+        print("ETRM/ETRMTRM Checkpoint Evaluation")
         print(f"{'=' * 60}")
         print(f"Config: {args.config_name}")
         print(f"Model type: {args.model_type}")
         print(f"Checkpoint: {args.checkpoint}")
         print(f"Max eval groups: {args.max_eval_groups or 'all'}")
         print(f"World size: {world_size}")
-        if args.batch_size:
-            print(f"Batch size: {args.batch_size} (per-GPU)")
+        if args.global_batch_size:
+            print(f"Batch size: {args.global_batch_size} (global)")
         else:
-            print(f"Batch size: {config.global_batch_size // world_size} (per-GPU, from config)")
+            print(f"Batch size: {config.global_batch_size} (global, from config)")
         print(f"{'=' * 60}\n")
 
     # Create eval dataloader
     eval_loader, eval_metadata = create_dataloader(
-        config, rank, world_size, args.max_eval_groups, args.batch_size
+        config, rank, world_size, args.max_eval_groups, args.global_batch_size
     )
 
     if rank == 0:
-        print(f"Eval metadata:")
+        print("Eval metadata:")
         print(f"  Vocab size: {eval_metadata.vocab_size}")
         print(f"  Seq len: {eval_metadata.seq_len}")
         print(f"  Num puzzle identifiers: {eval_metadata.num_puzzle_identifiers}")
-        print(f"  Num groups: {eval_metadata.num_groups}")
+        print(f"  Num groups: {eval_metadata.total_groups}")
         print()
 
     # Create model
-    model = create_model(config, eval_metadata, args.model_type, world_size, args.batch_size)
+    model = create_model(config, eval_metadata, args.model_type, world_size, args.global_batch_size)
     model = model.cuda()
 
     # Load checkpoint
@@ -297,6 +318,14 @@ def main():
     if rank == 0:
         print("Starting evaluation...")
 
+    forward_dtype = getattr(config.arch, "forward_dtype", None)
+    if forward_dtype == "bfloat16":
+        autocast_dtype = torch.bfloat16
+    elif forward_dtype == "float16":
+        autocast_dtype = torch.float16
+    else:
+        autocast_dtype = None
+
     results = evaluate_model(
         model=model,
         eval_loader=eval_loader,
@@ -304,6 +333,7 @@ def main():
         evaluator=evaluator,
         rank=rank,
         world_size=world_size,
+        autocast_dtype=autocast_dtype,
     )
 
     # Print and save results

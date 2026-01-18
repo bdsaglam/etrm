@@ -2,7 +2,7 @@
 # Evaluate ETRM/ETRMTRM checkpoint on full test set using all GPUs
 #
 # Usage:
-#   ./eval_checkpoint.sh <run_name> [checkpoint_step] [--batch-size N]
+#   ./eval_checkpoint.sh <run_name> [checkpoint_step] [--global-batch-size N]
 #
 # Examples:
 #   ./eval_checkpoint.sh F1_standard              # Latest checkpoint
@@ -10,7 +10,7 @@
 #   ./eval_checkpoint.sh F2_hybrid_var            # Different run
 #   ./eval_checkpoint.sh F3_etrmtrm               # ETRMTRM model
 #   ./eval_checkpoint.sh F4_lpn_var               # LPN model
-#   ./eval_checkpoint.sh F1_standard --batch-size 128  # Custom batch size
+#   ./eval_checkpoint.sh F1_standard --global-batch-size 1024  # Custom global batch size
 #
 # The script auto-detects:
 #   - Model type (etrm vs etrmtrm) based on run name
@@ -26,7 +26,7 @@ BATCH_SIZE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --batch-size)
+        --batch-size|--global-batch-size)
             BATCH_SIZE="$2"
             shift 2
             ;;
@@ -42,13 +42,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$RUN_NAME" ]; then
-    echo "Usage: $0 <run_name> [checkpoint_step] [--batch-size N]"
+    echo "Usage: $0 <run_name> [checkpoint_step] [--global-batch-size N]"
     echo ""
     echo "Examples:"
     echo "  $0 F1_standard                      # Evaluate F1 with latest checkpoint"
     echo "  $0 F2_hybrid_var 25000              # Evaluate F2 at step 25000"
     echo "  $0 F3_etrmtrm                       # Evaluate ETRMTRM model"
-    echo "  $0 F1_standard --batch-size 128     # Custom batch size"
+    echo "  $0 F1_standard --global-batch-size 1024    # Custom global batch size"
     echo ""
     echo "Available runs:"
     ls -1 ./checkpoints/etrm-final/ 2>/dev/null || echo "  None found"
@@ -112,7 +112,7 @@ echo "Model type:  $MODEL_TYPE"
 echo "Config:      $CONFIG_NAME"
 echo "Checkpoint:  $CHECKPOINT"
 echo "GPUs:        $NUM_GPUS"
-[ -n "$BATCH_SIZE" ] && echo "Batch size:  $BATCH_SIZE (per-GPU)"
+[ -n "$BATCH_SIZE" ] && echo "Batch size:  $BATCH_SIZE (global)"
 echo "=============================================="
 echo ""
 
@@ -126,9 +126,9 @@ CMD="torchrun --nproc-per-node $NUM_GPUS \
     --config-name $CONFIG_NAME \
     --model-type $MODEL_TYPE"
 
-# Add batch size if specified (per-GPU batch size)
+# Add batch size if specified (global batch size)
 if [ -n "$BATCH_SIZE" ]; then
-    CMD="$CMD --batch-size $BATCH_SIZE"
+    CMD="$CMD --global-batch-size $BATCH_SIZE"
 fi
 
 # Run evaluation with all GPUs
