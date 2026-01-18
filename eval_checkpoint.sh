@@ -51,12 +51,12 @@ if [ -z "$RUN_NAME" ]; then
     echo "  $0 F1_standard --batch-size 128     # Custom batch size"
     echo ""
     echo "Available runs:"
-    ls -1 /home/baris/repos/trm-original/checkpoints/etrm-final/ 2>/dev/null || echo "  None found"
+    ls -1 ./checkpoints/etrm-final/ 2>/dev/null || echo "  None found"
     exit 1
 fi
 
 # Base checkpoint directory
-CHECKPOINT_BASE="/home/baris/repos/trm-original/checkpoints/etrm-final"
+CHECKPOINT_BASE="./checkpoints/etrm-final"
 CHECKPOINT_DIR="${CHECKPOINT_BASE}/${RUN_NAME}"
 
 # Check if checkpoint directory exists
