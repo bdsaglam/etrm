@@ -102,14 +102,18 @@ def infer_model_type(config_name: str) -> str:
 
 def create_model(config: Any, model_type: str, batch_size: int):
     """Create model with specified batch size."""
-    # Create fake metadata
+    # Create fake metadata with all required fields
     metadata = PuzzleDatasetMetadata(
+        pad_id=0,
+        ignore_label_id=-100,
+        blank_identifier_id=0,
         vocab_size=12,
         seq_len=900,
         num_puzzle_identifiers=1000,
-        blank_identifier_id=0,
+        total_groups=100,
+        mean_puzzle_examples=5.0,
+        total_puzzles=1000,
         sets=["test"],
-        num_groups=100,
     )
 
     # Build model config from arch params
