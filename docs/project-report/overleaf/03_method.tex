@@ -136,47 +136,66 @@ Hypothesis: A variational bottleneck promotes a structured latent space of trans
 
 We study two variants.
 
-\paragraph{Cross-attention VAE.} Apply variational bottleneck after aggregating demos:
-\begin{enumerate}
-  \item Encode each demo with a deep transformer (8 layers).
-  \item Aggregate via cross-attention.
-  \item Pool and project to variational parameters:
-    \[
-      \boldsymbol{\mu},\ \log\boldsymbol{\sigma}^2 = \text{MLP}(\text{MeanPool}(\mathbf{c}))
-    \]
-  \item Sample via reparameterization \cite{vae}:
-    \[
-      \mathbf{z} = \boldsymbol{\mu} + \boldsymbol{\sigma}\odot\boldsymbol{\epsilon},\quad \boldsymbol{\epsilon}\sim\mathcal{N}(\mathbf{0},\mathbf{I})
-    \]
-  \item Decode to context shape:
-    \[
-      \mathbf{c} = \text{Reshape}(\text{Linear}(\mathbf{z}))\in\mathbb{R}^{T\times D}
-    \]
-\end{enumerate}
+\paragraph{Cross-attention VAE.} Apply variational bottleneck \emph{after} aggregating demos via cross-attention. This allows the model to capture cross-demo patterns before compressing to a latent code.
 
-KL regularization:
-\[
-\mathcal{L}_{\text{KL}} = D_{\text{KL}}(q(\mathbf{z}\mid\text{demos})\|p(\mathbf{z})) = -\tfrac{1}{2}\sum_j\big(1+\log\sigma_j^2-\mu_j^2-\sigma_j^2\big)
-\]
+\begin{verbatim}
+def crossattn_vae_encoder(demo_inputs, demo_outputs, demo_mask):
+    # Stage 1: Deep per-demo encoding (8 layers, CLS pooling)
+    encodings = []
+    for i in range(K):
+        h = deep_transformer(concat(demo_inputs[:,i], demo_outputs[:,i]))
+        e = cls_pooling(h)  # (B, D)
+        encodings.append(e)
+    E = stack(encodings, dim=1)  # (B, K, D)
 
-\paragraph{Per-demo VAE.} Inspired by LPN \cite{lpn}, apply variational inference per demo:
-\begin{enumerate}
-  \item Encode each demo with a shallow transformer (2 layers, 128 hidden).
-  \item Project each encoding to per-demo variational parameters:
-    \[
-      \boldsymbol{\mu}_i,\ \log\boldsymbol{\sigma}_i^2 = \text{Linear}(\mathbf{e}_i)
-    \]
-  \item Sample per-demo latents $\mathbf{z}_i=\boldsymbol{\mu}_i+\boldsymbol{\sigma}_i\odot\boldsymbol{\epsilon}_i$.
-  \item Aggregate via mean pooling: $\bar{\mathbf{z}}=\tfrac{1}{K}\sum_{i=1}^K\mathbf{z}_i$.
-  \item Project to context: $\mathbf{c}=\text{Reshape}(\text{Linear}(\bar{\mathbf{z}}))$.
-\end{enumerate}
+    # Stage 2: Cross-attention aggregation
+    Q = learnable_queries.expand(B, -1, -1)  # (B, T, D)
+    context = cross_attention(Q, E, E, mask=demo_mask)  # (B, T, D)
 
-KL loss averages across valid demos:
-\[
-\mathcal{L}_{\text{KL}} = \tfrac{1}{K}\sum_{i=1}^K D_{\text{KL}}(q(\mathbf{z}_i\mid\mathbf{x}_i,\mathbf{y}_i)\|p(\mathbf{z}))
-\]
+    # Stage 3: Variational bottleneck
+    z_pre = mean_pool(context)  # (B, D)
+    z_pre = rms_norm(z_pre)     # Stabilize before projection
+    mu, logvar = linear_proj(z_pre), linear_proj(z_pre)
+    logvar = clamp(logvar, -10, 10)
 
-Cross-attention VAE captures cross-demo patterns; per-demo VAE is simpler but may lose demo interactions. We adopt LPN's encoder design for comparison but \emph{do not} use test-time gradient search; our encoders produce fixed representations.
+    # Reparameterization (training only)
+    z = mu + exp(0.5 * logvar) * randn_like(mu) if training else mu
+
+    # Decode to output shape
+    context = reshape(linear(z), (B, T, D))
+    return context
+\end{verbatim}
+
+\paragraph{Per-demo VAE.} Inspired by LPN \cite{lpn}, apply variational inference \emph{per demo} before aggregation. Each demo gets its own latent code, which are then averaged.
+
+\begin{verbatim}
+def perdemo_vae_encoder(demo_inputs, demo_outputs, demo_mask):
+    # Stage 1: Shallow per-demo encoding (2 layers, 128 hidden)
+    encodings = []
+    for i in range(K):
+        h = shallow_transformer(concat(demo_inputs[:,i], demo_outputs[:,i]))
+        e = cls_pooling(h)  # (B, D_internal=128)
+        encodings.append(e)
+    E = stack(encodings, dim=1)  # (B, K, 128)
+
+    # Stage 2: Per-demo variational projection
+    mu = linear_proj(E)      # (B, K, latent_dim=32)
+    logvar = linear_proj(E)  # (B, K, 32)
+    logvar = clamp(logvar, -10, 10)
+
+    # Reparameterize each demo independently
+    z_demos = mu + exp(0.5 * logvar) * randn_like(mu) if training else mu
+
+    # Stage 3: Mean aggregation (after sampling)
+    z_demos = z_demos * demo_mask.unsqueeze(-1)  # Mask invalid
+    z_pooled = sum(z_demos, dim=1) / num_valid_demos  # (B, 32)
+
+    # Project to output shape
+    context = reshape(linear(z_pooled), (B, T, D))
+    return context
+\end{verbatim}
+
+Cross-attention VAE captures cross-demo patterns before bottlenecking; per-demo VAE is more compact ($\sim$1M params vs.\ $\sim$16M) but may lose demo interactions. We adopt LPN's encoder design for comparison but \emph{do not} use test-time gradient search; our encoders produce fixed representations.
 
 \subsubsection{Iterative encoder (joint encoder--decoder refinement)}
 
@@ -243,26 +262,6 @@ Following TRM, we apply $\approx$1000 augmented versions per puzzle:
 
 The same augmentation is applied to all components of a puzzle (demos and tests) to preserve the transformation structure.
 
-\subsubsection{Encoder re-encoding: solving gradient starvation}
-
-We discovered an issue when caching encoder outputs. With dynamic halting, only samples that reset received fresh encoder outputs (~2\% per step), so the encoder received gradients from only 2\% of data, stunting learning. Training accuracy plateaued around 35\%.
-
-Solution: re-encode the full batch at every ACT step (no caching). Pseudocode:
-
-\begin{verbatim}
-def forward_step(carry, batch):
-    # ALWAYS encode - no caching
-    context = encoder(batch['demo_inputs'],
-                     batch['demo_outputs'],
-                     batch['demo_mask'])
-
-    # Proceed with decoder...
-    output = decoder(carry, batch['inputs'], context)
-    return output
-\end{verbatim}
-
-This ensures 100\% gradient coverage for the encoder at the cost of extra computation. After this fix, training accuracy rose from 35\% to over 86\%.
-
 \subsubsection{Pretrained decoder initialization}
 
 We initialize the decoder from TRM's pretrained weights, providing:
@@ -286,7 +285,7 @@ For VAE encoders, the training loss is:
 
 Practical considerations:
 \begin{itemize}
-  \item KL annealing: start $\beta=0$, gradually increase.
+  \item KL weight: we use a fixed $\beta=0.0001$.
   \item Numerical stability: clamp $\log\sigma^2\in[-10,10]$.
   \item Evaluation: use mean $\boldsymbol{\mu}$ without sampling for deterministic evaluation.
 \end{itemize}

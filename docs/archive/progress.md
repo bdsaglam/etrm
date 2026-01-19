@@ -1,0 +1,394 @@
+# Progress Summary - January 9, 2026
+
+## Session Overview
+
+Investigation and resolution of failed transfer learning experiments (O1, O2, O3, E1) that appeared to crash but were actually running 100-1000x slower than expected. Led to discovery of fundamental gradient starvation issue in cached encoder approach and implementation of re-encoding solution (Approach 4).
+
+---
+
+## Critical Bugs Found and Fixed
+
+### 1. Encoder Performance Bug (FIXED)
+
+**Problem**: Training appeared to crash but was actually running at 0.002-0.025 it/s (vs expected ~0.3-0.5 it/s)
+
+**Root Cause**: Encoding entire batch even when only subset needed reset
+```python
+# BAD: Encode all 256 samples even if only 10 need reset
+new_context = self.encoder(
+    new_current_data["demo_inputs"],  # All 256
+    new_current_data["demo_labels"],
+    new_current_data["demo_mask"],
+)
+# Then discard 246 of them via torch.where!
+```
+
+**Fix**: Extract reset indices and encode only reset samples
+```python
+# GOOD: Encode only the 10 samples that need reset
+reset_indices = needs_reset.nonzero(as_tuple=True)[0]
+reset_context = self.encoder(
+    new_current_data["demo_inputs"][reset_indices],  # Only 10
+    new_current_data["demo_labels"][reset_indices],
+    new_current_data["demo_mask"][reset_indices],
+)
+```
+
+**Impact**:
+- O1: 422 sec/it → expected ~3-4 sec/it (100x speedup)
+- E1: 39 sec/it → expected ~3-4 sec/it (10x speedup)
+
+**File**: `models/recursive_reasoning/etrm.py` (lines 476-511, 589-624)
+
+### 2. Gradient Starvation Bug (ROOT CAUSE)
+
+**Problem**: E2/E3 experiments completed successfully but achieved only 35-50% train accuracy (vs 96.7% in online mode)
+
+**Root Cause**: Context caching with detachment starves encoder of gradients
+
+```python
+# Encoder only called when samples reset
+if needs_reset.any():
+    new_context = encoder(reset_samples)
+    context = mix(new_context, carry.cached_context)  # Mix reset with cached
+else:
+    context = carry.cached_context  # Use cached (DETACHED!)
+
+# Store detached for next batch
+carry.cached_context = context.detach()  # ← GRADIENTS CUT!
+```
+
+**Gradient Flow Analysis**:
+```
+Batch 1: Encoder gets gradients from 256 samples (100%) ✅
+Batch 2: Encoder gets gradients from ~10 samples (4%) ❌
+Batch 3+: Encoder gets gradients from ~5 samples (2%) ❌
+```
+
+**Why This Fails**: Encoder needs dense gradient signal to learn complex pattern extraction. With only 2% gradient coverage, it cannot learn useful representations.
+
+**Experiments Affected**:
+- E2 (hybrid_variational): 51.5% train accuracy
+- E3 (lpn_variational): 50.6% train accuracy
+- All reached completion but with poor accuracy
+
+### 3. Label Mismatch Bug (FIXED)
+
+**Problem**: Model returned logits but not labels, causing loss computation to use wrong labels for continuing samples
+
+**Root Cause**: When samples continue across batches, `batch["labels"]` contains NEW samples' labels at those positions, but model is still processing ORIGINAL continuing samples.
+
+**Fix**: Return labels from new_current_data which correctly preserves original labels via torch.where
+```python
+outputs = {
+    "logits": logits,
+    "labels": new_current_data["labels"],  # Correct labels for all samples
+    "q_halt_logits": q_halt_logits,
+    ...
+}
+```
+
+**File**: `models/recursive_reasoning/etrm.py` (line 511)
+
+---
+
+## Terminology
+
+- **TRM**: Original paper approach with learned puzzle embeddings and ACT
+- **ETRM**: Our research contribution - encoder-based TRM with dynamic halting
+- **ETRM-FCT**: Explored variant with fixed computation time (not continuing)
+
+## Solution: ETRM with Re-encoding
+
+### Core Insight
+
+**Remove caching entirely** and re-encode full batch every step:
+- Provides 100% encoder gradient coverage (fixes gradient starvation)
+- Maintains dynamic halting benefits (adaptive compute)
+- More efficient than online mode (1 encoder forward/batch vs N)
+
+### Implementation
+
+```python
+def _forward_train_original(carry, batch):
+    # Update data (blend reset samples with continuing)
+    new_current_data = torch.where(needs_reset, batch, carry.current_data)
+
+    # ALWAYS ENCODE - NO CACHING!
+    context = self.encoder(
+        new_current_data["demo_inputs"],   # Full batch (256 samples)
+        new_current_data["demo_labels"],
+        new_current_data["demo_mask"],
+    )
+    # No .detach() - keep gradients flowing!
+
+    # Forward inner model
+    inner_carry, logits, q_halt = self.inner(carry, new_current_data, context)
+
+    # Dynamic halting
+    halted = (steps >= max_steps) | (q_halt > 0)
+
+    # NO cached_context in carry!
+    return TRMEncoderCarry(
+        inner_carry=inner_carry,
+        steps=steps,
+        halted=halted,
+        current_data=new_current_data,
+    ), outputs
+```
+
+### Gradient Flow
+
+```
+Every batch:
+  encoder(256 demos) ──→ context ──→ inner() ──→ loss
+       ↑                                          ↓
+       └──────────── backward ←───────────────────┘
+  ✅ Encoder gets gradients from 100% of batch
+```
+
+### Efficiency Comparison
+
+| Metric | Online (N=8) | ACT Cached | ACT Re-encode |
+|--------|--------------|-----------|---------------|
+| Encoder forwards per batch | 2048 (256×8) | ~5-10 (2% of batch) | 256 (100% of batch) |
+| Encoder gradient coverage | 100% | ~2% | 100% ✅ |
+| Dynamic halting | No | Yes | Yes ✅ |
+| Batches per 256 samples | 1 | ~8 | ~8 |
+| Total encoder forwards | ~2048 | ~40-80 | ~2048 |
+
+**Key**: Re-encoding matches online mode efficiency while enabling dynamic halting!
+
+### Files Modified
+
+1. `models/recursive_reasoning/etrm.py`:
+   - Removed `cached_context` from TRMEncoderCarry dataclass
+   - Removed caching logic from `_forward_train_original`
+   - Removed caching logic from `_forward_eval_step`
+   - Always encode full batch (new_current_data)
+   - Added labels to outputs
+
+2. `pretrain_etrm.py`:
+   - Fixed evaluation metric filtering to separate encoder diagnostics (floats) from tensor metrics
+
+---
+
+## Experimental Results
+
+### ETRM Experiment (A4_reencode_FIXED)
+
+**Config**:
+- ETRM (encoder-based TRM with re-encoding)
+- Standard encoder (2 layers, mean pooling)
+- halt_max_steps=16
+- halt_exploration_prob=0.5
+
+**Metrics at Step 240**:
+```
+train/accuracy: 86.15%         (token-level)
+train/exact_accuracy: 10.9%    (sequence-level EM)
+train/q_halt_accuracy: 91.8%
+train/q_halt_loss: 0.226
+train/steps: 11.34             (avg ACT steps used)
+```
+
+**Analysis**:
+- ✅ Token accuracy improving (86% vs 35-50% in cached approach)
+- ✅ EM starting to rise (10.9% from 0%)
+- ✅ Adaptive halting working (11.34 steps vs max 16)
+- ✅ Q-halt loss decreasing (learning happening)
+- ✅ Q-halt accuracy high and stable (91.8%)
+
+**Gradient Flow Confirmed**:
+- Encoder receives gradients from 100% of samples every batch
+- No more gradient starvation
+
+---
+
+## Understanding Q-Halt Metrics
+
+### What Q-Halt Accuracy Measures
+
+```python
+# From losses.py
+is_correct = (predictions == labels)  # Per-token
+seq_is_correct = is_correct.sum(-1) == seq_len  # Entire sequence perfect?
+
+# Q-halt prediction: should we halt or continue?
+q_halt_accuracy = ((q_halt_logits >= 0) == seq_is_correct).mean()
+```
+
+**Interpretation**:
+- seq_is_correct=True → Q-head should predict "halt" (logits ≥ 0)
+- seq_is_correct=False → Q-head should predict "continue" (logits < 0)
+- q_halt_accuracy = how often Q-head makes correct halt/continue decision
+
+### Why Q-Halt Accuracy Can Decrease While EM Increases
+
+**This is EXPECTED behavior with exploration!**
+
+**Phase 1: Early Training (EM ≈ 0%)**
+- Almost all sequences incorrect
+- Trivial strategy: always predict "continue"
+- Q-halt accuracy: Very high (~99%)
+  - 99% of samples are incorrect → should continue → easy!
+
+**Phase 2: Learning Phase (EM 10-50%)**
+- Mix of correct and incorrect sequences
+- Must discriminate case-by-case (harder!)
+- With halt_exploration_prob=0.5:
+  - 50% of time: forced to continue even when correct
+  - Creates confusing signal for Q-head
+- Q-halt accuracy: Decreases (~85-92%)
+  - Must learn step-dependent correctness
+  - Exploration creates noise
+
+**Phase 3: High Performance (EM > 90%)**
+- Most sequences correct at DIFFERENT steps
+- Q-head must learn when sequence BECOMES correct
+- Q-halt accuracy: Stabilizes at lower level than Phase 1
+
+### Signs of Healthy Training
+
+✅ **Good signs** (what we see):
+- train/steps: 11.34 (adaptive halting working, not stuck at 16)
+- train/exact_accuracy: 10.9% (EM increasing from 0%)
+- train/q_halt_loss: 0.226 and decreasing (learning happening)
+- train/q_halt_accuracy: 91.8% (still very high)
+
+❌ **Bad signs** (what would indicate bugs):
+- train/steps: 16.0 always (halting broken)
+- train/q_halt_accuracy: ~50% (random guessing)
+- train/q_halt_loss: increasing (not learning)
+
+---
+
+## Key Insights
+
+### 1. Halting Controls Data Flow, Not Gradient Flow
+
+**Critical understanding**: In TRM and ETRM, halting determines:
+- ✅ Which samples get new data next batch
+- ✅ Which samples continue with same data
+- ❌ NOT which samples contribute gradients this batch
+
+**All samples contribute gradients every batch**, regardless of:
+- How many steps they've taken
+- Whether they will halt this step
+- Whether they're new or continuing
+
+This is the same in ETRM - we just ensure encoder also gets 100% gradients (not just inner model).
+
+### 2. Truncated BPTT is Essential
+
+Carry state is detached between batches:
+```python
+new_carry = TRMEncoderCarry(
+    inner_carry=inner_carry.detach(),  # ← Gradients cut here
+    ...
+)
+```
+
+**Why**: Prevents gradient accumulation across batches, ensures stable training
+
+### 3. Encoder Needs Dense Gradients
+
+Caching seemed like a performance optimization but was actually a fatal flaw:
+- Reduced encoder gradients to 2% of what they should be
+- Encoder couldn't learn useful representations
+- Training "succeeded" but with poor accuracy
+
+### 4. Re-encoding is Not Wasteful
+
+While it seems expensive to re-encode every batch, the total compute is same as ETRM-FCT:
+- ETRM-FCT: N encoder forwards in ONE batch (all samples synchronized)
+- ETRM: 1 encoder forward per batch across ~N batches (samples cycle in/out)
+- Both: ~N × 256 total encoder forwards per sample
+
+But ETRM enables adaptive halting (easy samples use fewer steps than hard ones).
+
+---
+
+## Files Changed
+
+### Core Implementation
+- `models/recursive_reasoning/etrm.py`
+  - Removed context caching logic
+  - Fixed encoder to process only reset samples initially (performance bug fix)
+  - Then removed caching entirely for ETRM (gradient starvation fix)
+  - Added labels to outputs (label mismatch bug fix)
+
+### Documentation
+- Updated module docstring to describe ETRM re-encoding approach
+- `config/arch/trm_encoder_original.yaml` - comments updated
+- `docs/training_modes_comparison.md` - terminology updated to TRM/ETRM/ETRM-FCT
+
+### Training Script
+- `pretrain_etrm.py`
+  - Fixed evaluation metric filtering
+
+---
+
+## Current Status
+
+### What Works
+✅ Re-encoding provides full encoder gradients (100% coverage)
+✅ Training stable with decreasing losses
+✅ Token accuracy improving (86.15%)
+✅ Exact match starting to increase (10.9%)
+✅ Adaptive halting functional (avg 11.34 steps)
+✅ Q-head learning (loss decreasing, accuracy high)
+
+### What's Being Monitored
+🔄 Will EM continue to rise beyond 50%? (Previous cached ETRM capped here)
+🔄 Final accuracy compared to ETRM-FCT (96.7% target)
+🔄 Generalization to unseen puzzles
+
+### Next Steps
+1. Continue training ETRM (A4_reencode_FIXED) to convergence
+2. Compare final metrics to ETRM-FCT (pretrain_etrm.py, 96.7% baseline)
+3. If successful, use ETRM for full dataset experiments
+4. Test generalization on held-out evaluation set
+
+---
+
+## Lessons Learned
+
+### 1. Performance Bugs Can Masquerade as Crashes
+O1/O2/O3/E1 weren't crashing - they were 100x slower due to wasteful encoding
+
+### 2. "Optimizations" Can Break Learning
+Context caching seemed smart but starved encoder of gradients
+
+### 3. Gradient Coverage Matters More Than Compute
+Better to re-encode and get full gradients than cache and get 2% gradients
+
+### 4. TRM Dynamics Are Subtle
+- Carry persistence across batches (samples cycle in/out)
+- Truncated BPTT with detachment (gradients local to each batch)
+- Halting controls data flow (which samples get new data), not gradient flow
+- All samples train every batch (all contribute to loss/gradients)
+
+### 5. Metrics Can Be Misleading
+- High Q-halt accuracy early doesn't mean it's learning hard task
+- Q-halt accuracy drop during learning is expected with exploration
+- Focus on: loss trends, EM, and step counts
+
+---
+
+## References
+
+**Files to Read for Context**:
+- `docs/training_modes_comparison.md` - Detailed comparison of 4 approaches
+- `docs/data_flow.md` - How data flows through training pipeline
+- `docs/codebase.md` - Overall codebase structure
+
+**Key Experiments**:
+- `jobs-tl-debug.txt` - Failed experiments that revealed bugs
+- `jobs-act-reencode.txt` - Re-encoding validation experiments
+
+**Related Code**:
+- `models/recursive_reasoning/etrm.py` - ETRM-FCT implementation (fixed steps)
+- `models/recursive_reasoning/etrm.py` - ETRM implementation (dynamic halting)
+- `pretrain_etrm.py` - ETRM-FCT training loop
+- `pretrain_etrm.py` - ETRM training loop
