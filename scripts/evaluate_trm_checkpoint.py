@@ -1,14 +1,17 @@
 """
-Standalone evaluation script for original TRM checkpoints.
+Unified evaluation script for TRM, ETRM, and ETRMTRM checkpoints.
 
 Evaluates a trained checkpoint on the full test set (or subset).
-Uses PuzzleDataset (non-encoder mode).
+Auto-detects model type and uses appropriate dataset.
 
 Usage:
-    # Evaluate TRM checkpoint on full test set
+    # Evaluate TRM checkpoint (auto-detected)
     python evaluate_trm_checkpoint.py \
-        --checkpoint checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_50000 \
-        --config-name cfg_pretrain_arc_agi_1
+        --checkpoint ./checkpoints/official_trm/arc_v1_public/step_518071
+
+    # Evaluate ETRM checkpoint (auto-detected from config)
+    python evaluate_trm_checkpoint.py \
+        --checkpoint ./checkpoints/etrm-final/F1_standard/step_50000
 
     # Limit to N puzzle groups for quick test
     python evaluate_trm_checkpoint.py ... --max-eval-groups 32
@@ -17,65 +20,72 @@ Usage:
     torchrun --nproc-per-node 4 evaluate_trm_checkpoint.py ...
 """
 
-import os
-import sys
 import argparse
 import json
-import numpy as np
-from typing import Dict, Any, Optional
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader
 import tqdm
-from omegaconf import OmegaConf
-from hydra import initialize_config_dir, compose
+from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
+from omegaconf import OmegaConf
+from torch.utils.data import DataLoader
+
+REPO_ROOT = Path(__file__).parent.parent
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, str(REPO_ROOT))
 
-from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig
 from dataset.common import PuzzleDatasetMetadata
+from dataset.fewshot_puzzle_dataset import FewShotPuzzleDataset, FewShotPuzzleDatasetConfig
 from evaluators.arc import ARC
+from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig
 from utils.functions import load_model_class
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate TRM checkpoint")
+    parser = argparse.ArgumentParser(description="Evaluate TRM/ETRM/ETRMTRM checkpoint")
     parser.add_argument(
-        "--checkpoint", type=str, required=True,
-        help="Path to model checkpoint (step_* file)"
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to model checkpoint (step_* file)",
     )
     parser.add_argument(
-        "--config-name", type=str, default="cfg_pretrain_arc_agi_1",
-        help="Hydra config name (default: cfg_pretrain_arc_agi_1)"
+        "--config-name",
+        type=str,
+        default=None,
+        help="Hydra config name (default: auto-detect from checkpoint config)",
     )
     parser.add_argument(
-        "--use-checkpoint-config",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use all_config.yaml from checkpoint directory when available (default: true)"
+        "--model-type",
+        type=str,
+        choices=["trm", "etrm", "etrmtrm", "auto"],
+        default="auto",
+        help="Model type: trm, etrm, etrmtrm, or auto-detect (default: auto)",
     )
     parser.add_argument(
-        "--max-eval-groups", type=int, default=None,
-        help="Limit evaluation to first N puzzle groups (None = full test set)"
+        "--max-eval-groups",
+        type=int,
+        default=None,
+        help="Limit evaluation to first N puzzle groups (None = full test set)",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=None,
-        help="Evaluation global batch size (deprecated; use --global-batch-size)"
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory to save results (default: checkpoint directory)",
     )
     parser.add_argument(
-        "--global-batch-size", type=int, default=None,
-        help="Evaluation global batch size (default: from config)"
-    )
-    parser.add_argument(
-        "--output-dir", type=str, default=None,
-        help="Directory to save results (default: checkpoint directory)"
-    )
-    parser.add_argument(
-        "--config-overrides", nargs="*", default=[],
-        help="Additional Hydra config overrides"
+        "--config-overrides",
+        nargs="*",
+        default=[],
+        help="Additional Hydra config overrides",
     )
     return parser.parse_args()
 
@@ -83,15 +93,17 @@ def parse_args():
 def load_config(config_name: str, overrides: list) -> Any:
     """Load Hydra config."""
     GlobalHydra.instance().clear()
-    config_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+    config_dir = REPO_ROOT / "config"
 
-    with initialize_config_dir(config_dir=config_dir, version_base=None):
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name=config_name, overrides=overrides)
 
     return cfg
 
 
-def _get_config_extras(cfg: Any, drop_keys: Optional[set[str]] = None) -> Dict[str, Any]:
+def _get_config_extras(
+    cfg: Any, drop_keys: Optional[set[str]] = None
+) -> Dict[str, Any]:
     """Extract extra fields from either Pydantic or OmegaConf configs."""
     if hasattr(cfg, "__pydantic_extra__") and cfg.__pydantic_extra__ is not None:
         extras = dict(cfg.__pydantic_extra__)
@@ -105,20 +117,37 @@ def _get_config_extras(cfg: Any, drop_keys: Optional[set[str]] = None) -> Dict[s
     return extras
 
 
+def detect_model_type(config: Any) -> str:
+    """Auto-detect model type from config."""
+    arch_name = config.arch.name.lower()
+
+    if "etrmtrm" in arch_name:
+        return "etrmtrm"
+    elif "etrm" in arch_name or "encoder" in arch_name:
+        return "etrm"
+    else:
+        return "trm"
+
+
 def _compute_trm_eval_counts(
     dataset_paths: list[str],
     sets: list[str],
     split: str,
     max_groups: Optional[int],
 ) -> tuple[int, int]:
+    """Compute evaluation counts for TRM-style dataset (all augmentations)."""
     total_puzzles = 0
     total_examples = 0
 
     for dataset_path in dataset_paths:
         split_dir = os.path.join(dataset_path, split)
         for set_name in sets:
-            group_indices = np.load(os.path.join(split_dir, f"{set_name}__group_indices.npy"))
-            puzzle_indices = np.load(os.path.join(split_dir, f"{set_name}__puzzle_indices.npy"))
+            group_indices = np.load(
+                os.path.join(split_dir, f"{set_name}__group_indices.npy")
+            )
+            puzzle_indices = np.load(
+                os.path.join(split_dir, f"{set_name}__puzzle_indices.npy")
+            )
 
             num_groups = group_indices.size - 1
             if max_groups is not None:
@@ -127,10 +156,43 @@ def _compute_trm_eval_counts(
             num_puzzles = int(group_indices[num_groups])
             total_puzzles += num_puzzles
 
-            example_counts = puzzle_indices[1:num_puzzles + 1] - puzzle_indices[:num_puzzles]
+            example_counts = (
+                puzzle_indices[1 : num_puzzles + 1] - puzzle_indices[:num_puzzles]
+            )
             total_examples += int(example_counts.sum())
 
     return total_puzzles, total_examples
+
+
+def _compute_fewshot_eval_counts(
+    dataset_paths: list[str],
+    sets: list[str],
+    split: str,
+    max_groups: Optional[int],
+) -> tuple[int, int]:
+    """Compute evaluation counts for few-shot dataset (queries only)."""
+    total_puzzles = 0
+    total_queries = 0
+
+    for dataset_path in dataset_paths:
+        split_dir = os.path.join(dataset_path, split)
+        for set_name in sets:
+            group_indices = np.load(os.path.join(split_dir, f"{set_name}__group_indices.npy"))
+            puzzle_indices = np.load(os.path.join(split_dir, f"{set_name}__puzzle_indices.npy"))
+            num_demos = np.load(os.path.join(split_dir, f"{set_name}__num_demos.npy"))
+
+            num_groups = group_indices.size - 1
+            if max_groups is not None:
+                num_groups = min(max_groups, num_groups)
+
+            num_puzzles = int(group_indices[num_groups])
+            total_puzzles += num_puzzles
+
+            puzzle_sizes = puzzle_indices[1:num_puzzles + 1] - puzzle_indices[:num_puzzles]
+            queries = puzzle_sizes - num_demos[:num_puzzles]
+            total_queries += int(np.maximum(queries, 0).sum())
+
+    return total_puzzles, total_queries
 
 
 def create_dataloader(
@@ -138,25 +200,44 @@ def create_dataloader(
     rank: int,
     world_size: int,
     max_eval_groups: Optional[int],
-    global_batch_size: Optional[int] = None,
+    model_type: str,
 ):
-    """Create evaluation dataloader."""
-    data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
-    effective_global_batch = global_batch_size if global_batch_size is not None else config.global_batch_size
-
-    dataset = PuzzleDataset(
-        PuzzleDatasetConfig(
-            seed=config.seed,
-            dataset_paths=data_paths,
-            global_batch_size=effective_global_batch,
-            test_set_mode=True,
-            epochs_per_iter=1,
-            rank=rank,
-            num_replicas=world_size,
-            max_groups=max_eval_groups,
-        ),
-        split="test",
+    """Create evaluation dataloader for TRM or ETRM/ETRMTRM."""
+    data_paths = (
+        config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
     )
+
+    if model_type == "trm":
+        # TRM uses PuzzleDataset (no encoder, all augmentations)
+        dataset = PuzzleDataset(
+            PuzzleDatasetConfig(
+                seed=config.seed,
+                dataset_paths=data_paths,
+                global_batch_size=config.global_batch_size,
+                test_set_mode=True,
+                epochs_per_iter=1,
+                rank=rank,
+                num_replicas=world_size,
+                max_groups=max_eval_groups,
+            ),
+            split="test",
+        )
+    else:
+        # ETRM/ETRMTRM uses FewShotPuzzleDataset (with encoder)
+        dataset = FewShotPuzzleDataset(
+            FewShotPuzzleDatasetConfig(
+                seed=config.seed,
+                dataset_paths=data_paths,
+                global_batch_size=config.global_batch_size,
+                test_set_mode=True,
+                epochs_per_iter=1,
+                rank=rank,
+                num_replicas=world_size,
+                max_demos=getattr(config, "max_demos", 5),
+                max_groups=max_eval_groups,
+            ),
+            split="test",
+        )
 
     dataloader = DataLoader(
         dataset,
@@ -174,11 +255,9 @@ def create_model(
     config: Any,
     metadata: PuzzleDatasetMetadata,
     world_size: int,
-    global_batch_size: Optional[int] = None,
 ):
     """Create TRM model with loss head wrapper."""
-    effective_global_batch = global_batch_size if global_batch_size is not None else config.global_batch_size
-    per_gpu_batch_size = effective_global_batch // world_size
+    per_gpu_batch_size = config.global_batch_size // world_size
 
     model_cfg = dict(
         **_get_config_extras(config.arch, drop_keys={"name", "loss"}),
@@ -191,7 +270,9 @@ def create_model(
 
     model_cls = load_model_class(config.arch.name)
     loss_head_cls = load_model_class(config.arch.loss.name)
-    model = loss_head_cls(model_cls(model_cfg), **_get_config_extras(config.arch.loss, drop_keys={"name"}))
+    model = loss_head_cls(
+        model_cls(model_cfg), **_get_config_extras(config.arch.loss, drop_keys={"name"})
+    )
 
     return model
 
@@ -214,7 +295,10 @@ def load_checkpoint(model: torch.nn.Module, checkpoint_path: str, rank: int):
     if puzzle_emb_name in state_dict and hasattr(model, "model"):
         inner = getattr(model, "model", None)
         puzzle_emb = getattr(getattr(inner, "puzzle_emb", None), "weights", None)
-        if puzzle_emb is not None and state_dict[puzzle_emb_name].shape != puzzle_emb.shape:
+        if (
+            puzzle_emb is not None
+            and state_dict[puzzle_emb_name].shape != puzzle_emb.shape
+        ):
             expected_shape = puzzle_emb.shape
             if rank == 0:
                 print(
@@ -268,11 +352,17 @@ def evaluate_model(
             if progress_bar is not None:
                 progress_bar.update(global_batch_size)
             elif rank == 0 and processed_batches % 10 == 0:
-                print(f"Processing batch {processed_batches}: {set_name}, total samples: {total_samples}")
+                print(
+                    f"Processing batch {processed_batches}: {set_name}, total samples: {total_samples}"
+                )
 
             batch = {k: v.cuda() for k, v in batch.items()}
 
-            with torch.autocast(device_type="cuda", dtype=autocast_dtype) if autocast_dtype else torch.inference_mode():
+            with (
+                torch.autocast(device_type="cuda", dtype=autocast_dtype)
+                if autocast_dtype
+                else torch.inference_mode()
+            ):
                 with torch.device("cuda"):
                     carry = model.initial_carry(batch)
 
@@ -301,8 +391,6 @@ def evaluate_model(
 
 def main():
     args = parse_args()
-    if args.global_batch_size is None:
-        args.global_batch_size = args.batch_size
 
     # Initialize distributed if needed
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -314,33 +402,74 @@ def main():
 
     rank = dist.get_rank() if dist.is_initialized() else 0
 
-    # Load config
-    config = load_config(args.config_name, args.config_overrides)
-    checkpoint_config_path = os.path.join(os.path.dirname(args.checkpoint), "all_config.yaml")
-    if args.use_checkpoint_config and os.path.exists(checkpoint_config_path):
+    # Load config from checkpoint directory (always use checkpoint config)
+    checkpoint_config_path = Path(args.checkpoint).parent / "all_config.yaml"
+    if not checkpoint_config_path.is_absolute():
+        checkpoint_config_path = REPO_ROOT / checkpoint_config_path
+
+    if checkpoint_config_path.exists():
         if rank == 0:
             print(f"Using checkpoint config: {checkpoint_config_path}")
         config = OmegaConf.load(checkpoint_config_path)
 
+        # Apply config overrides using OmegaConf's built-in override mechanism
+        if args.config_overrides:
+            if rank == 0:
+                print(f"Applying config overrides: {args.config_overrides}")
+            override_conf = OmegaConf.from_dotlist(args.config_overrides)
+            config = OmegaConf.merge(config, override_conf)
+    else:
+        # Fallback to Hydra config
+        if args.config_name is None:
+            # Auto-detect config name based on checkpoint path
+            if "etrm" in str(args.checkpoint).lower():
+                if "etrmtrm" in str(args.checkpoint).lower():
+                    config_name = "cfg_pretrain_etrmtrm_arc_agi_1"
+                else:
+                    config_name = "cfg_pretrain_etrm_arc_agi_1"
+            else:
+                config_name = "cfg_pretrain_arc_agi_1"  # TRM default
+        else:
+            config_name = args.config_name
+
+        if rank == 0:
+            print(f"Warning: Checkpoint config not found at {checkpoint_config_path}")
+            print(f"Falling back to Hydra config: {config_name}")
+        config = load_config(config_name, args.config_overrides)
+
+    # Auto-detect model type if needed
+    if args.model_type == "auto":
+        model_type = detect_model_type(config)
+        if rank == 0:
+            print(f"Auto-detected model type: {model_type}")
+    else:
+        model_type = args.model_type
+
     if rank == 0:
         print(f"\n{'=' * 60}")
-        print("TRM Checkpoint Evaluation")
+        print(f"{model_type.upper()} Checkpoint Evaluation")
         print(f"{'=' * 60}")
-        print(f"Config: {args.config_name}")
+        print(f"Model type: {model_type}")
         print(f"Checkpoint: {args.checkpoint}")
         print(f"Max eval groups: {args.max_eval_groups or 'all'}")
         print(f"World size: {world_size}")
-        if args.global_batch_size:
-            print(f"Batch size: {args.global_batch_size} (global)")
-        else:
-            print(f"Batch size: {config.global_batch_size} (global, from config)")
+        print(f"Batch size: {config.global_batch_size} (global)")
+        print(f"\n>>> CRITICAL ARCHITECTURE PARAMS <<<")
+        if hasattr(config.arch, "L_cycles"):
+            print(f"L_cycles: {config.arch.L_cycles}")
+        if hasattr(config.arch, "H_cycles"):
+            print(f"H_cycles: {config.arch.H_cycles}")
+        if hasattr(config.arch, "L_layers"):
+            print(f"L_layers: {config.arch.L_layers}")
         print(f"{'=' * 60}\n")
 
     # Create eval dataloader
     eval_loader, eval_metadata = create_dataloader(
-        config, rank, world_size, args.max_eval_groups, args.global_batch_size
+        config, rank, world_size, args.max_eval_groups, model_type
     )
-    data_paths = config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
+    data_paths = (
+        config.data_paths_test if len(config.data_paths_test) > 0 else config.data_paths
+    )
 
     total_expected_samples = None
     if rank == 0:
@@ -354,26 +483,41 @@ def main():
             displayed_groups = eval_metadata.total_groups
         print(f"  Num groups: {displayed_groups}")
         if args.max_eval_groups is not None:
-            total_puzzles, total_examples = _compute_trm_eval_counts(
-                dataset_paths=data_paths,
-                sets=eval_metadata.sets,
-                split="test",
-                max_groups=args.max_eval_groups,
-            )
-            total_expected_samples = total_examples
-            print(f"  Num puzzles: {total_puzzles}")
-            print(f"  Total examples: {total_examples}")
+            if model_type == "trm":
+                total_puzzles, total_examples = _compute_trm_eval_counts(
+                    dataset_paths=data_paths,
+                    sets=eval_metadata.sets,
+                    split="test",
+                    max_groups=args.max_eval_groups,
+                )
+                total_expected_samples = total_examples
+                print(f"  Num puzzles: {total_puzzles}")
+                print(f"  Total examples: {total_examples}")
+            else:
+                total_puzzles, total_queries = _compute_fewshot_eval_counts(
+                    dataset_paths=data_paths,
+                    sets=eval_metadata.sets,
+                    split="test",
+                    max_groups=args.max_eval_groups,
+                )
+                total_expected_samples = total_queries
+                print(f"  Num puzzles: {total_puzzles}")
+                print(f"  Total query examples: {total_queries}")
         print()
 
     # Create model
-    model = create_model(config, eval_metadata, world_size, args.global_batch_size)
+    model = create_model(config, eval_metadata, world_size)
     model = model.cuda()
 
     # Load checkpoint
     load_checkpoint(model, args.checkpoint, rank)
 
     # Create evaluator
-    data_path = config.data_paths_test[0] if len(config.data_paths_test) > 0 else config.data_paths[0]
+    data_path = (
+        config.data_paths_test[0]
+        if len(config.data_paths_test) > 0
+        else config.data_paths[0]
+    )
     evaluator = ARC(
         data_path=data_path,
         eval_metadata=eval_metadata,
@@ -417,19 +561,27 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
 
         checkpoint_name = os.path.basename(args.checkpoint)
-        step_tag = checkpoint_name if checkpoint_name.startswith("step_") else "step_unknown"
+        step_tag = (
+            checkpoint_name if checkpoint_name.startswith("step_") else "step_unknown"
+        )
         if args.max_eval_groups is None:
             results_filename = f"eval_results_full_{step_tag}.json"
         else:
-            results_filename = f"eval_results_groups_{args.max_eval_groups}_{step_tag}.json"
+            results_filename = (
+                f"eval_results_groups_{args.max_eval_groups}_{step_tag}.json"
+            )
         results_file = os.path.join(output_dir, results_filename)
         with open(results_file, "w") as f:
-            json.dump({
-                "checkpoint": args.checkpoint,
-                "config": args.config_name,
-                "max_eval_groups": args.max_eval_groups,
-                "results": results,
-            }, f, indent=2)
+            json.dump(
+                {
+                    "checkpoint": args.checkpoint,
+                    "config": args.config_name,
+                    "max_eval_groups": args.max_eval_groups,
+                    "results": results,
+                },
+                f,
+                indent=2,
+            )
         print(f"\nResults saved to: {results_file}")
 
     if dist.is_initialized():

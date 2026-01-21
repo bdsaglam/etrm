@@ -43,29 +43,26 @@ Expected: PyTorch state_dict file like `step_<N>`
 
 ### 3. Evaluate Official Checkpoint on Our Test Set
 
-Use `evaluate_trm_checkpoint.py` (for original TRM with puzzle embeddings):
+Use `evaluate_trm_checkpoint.py` or the convenience shell script:
 
 ```bash
-# First, find the checkpoint step file
-ls ./checkpoints/official_trm/arc_v1_public/
+# Using shell script (recommended - handles multi-GPU automatically):
+./scripts/eval_trm_checkpoint.sh \
+    --checkpoint ./checkpoints/official_trm/arc_v1_public/step_518071 \
+    --max-eval-groups 32
 
-# Evaluate official TRM on 32 groups (same as our experiments)
-# Single GPU:
-python evaluate_trm_checkpoint.py \
-    --checkpoint ./checkpoints/official_trm/arc_v1_public/step_XXXXXX \
-    --config-name cfg_pretrain_arc_agi_1 \
-    --max-eval-groups 32 \
-    --output-dir ./checkpoints/official_trm/arc_v1_public
+# Or using Python directly (single GPU):
+python scripts/evaluate_trm_checkpoint.py \
+    --checkpoint ./checkpoints/official_trm/arc_v1_public/step_518071 \
+    --max-eval-groups 32
 
-# Multi-GPU (faster):
-torchrun --nproc-per-node 4 evaluate_trm_checkpoint.py \
-    --checkpoint ./checkpoints/official_trm/arc_v1_public/step_XXXXXX \
-    --config-name cfg_pretrain_arc_agi_1 \
-    --max-eval-groups 32 \
-    --output-dir ./checkpoints/official_trm/arc_v1_public
+# Or multi-GPU with Python:
+torchrun --nproc-per-node 4 scripts/evaluate_trm_checkpoint.py \
+    --checkpoint ./checkpoints/official_trm/arc_v1_public/step_518071 \
+    --max-eval-groups 32
 ```
 
-**Note**: The official checkpoint may have different puzzle embedding dimensions. If you get shape mismatch errors, the script will attempt to handle it by averaging embeddings.
+**Note**: The script automatically uses the checkpoint's `all_config.yaml` which contains the correct architecture parameters (L_cycles=4, etc.). The checkpoint also handles puzzle embedding dimension mismatches automatically.
 
 ### 4. Compare Results
 

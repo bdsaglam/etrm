@@ -115,22 +115,35 @@ class ARC:
 
         submission = {}
         correct = [0.0 for _ in range(len(self.pass_Ks))]
+        num_evaluated_puzzles = 0
 
         for name, puzzle in self.test_puzzles.items():
+            # Check if this puzzle has any predictions (i.e., was it evaluated?)
+            has_predictions = False
+            for hmap, preds in global_hmap_preds:  # type: ignore
+                if name in preds:
+                    has_predictions = True
+                    break
+
+            if not has_predictions:
+                continue
+
+            num_evaluated_puzzles += 1
+
             # Process test examples in this puzzle
             submission[name] = []
             num_test_correct = [0 for _ in range(len(self.pass_Ks))]
             for pair in puzzle["test"]:
                 input_hash = grid_hash(arc_grid_to_np(pair["input"]))
                 label_hash = grid_hash(arc_grid_to_np(pair["output"]))
-                
+
                 p_map = {}
                 for hmap, preds in global_hmap_preds:  # type: ignore
                     for h, q in preds.get(name, {}).get(input_hash, {}):
                         p_map.setdefault(h, [0, 0])
                         p_map[h][0] += 1
                         p_map[h][1] += q
-                        
+
                 if not len(p_map):
                     print (f"Puzzle {name} has no predictions.")
                     continue
@@ -171,7 +184,11 @@ class ARC:
             with open(os.path.join(save_path, "submission.json"), "w") as f:
                 json.dump(submission, f)
 
-        # Final result
-        all_results = {f"ARC/pass@{k}": correct[i] / len(self.test_puzzles) for i, k in enumerate(self.pass_Ks)}
+        # Final result - divide by number of puzzles actually evaluated, not total test set size
+        if num_evaluated_puzzles == 0:
+            print("WARNING: No puzzles were evaluated!")
+            return {f"ARC/pass@{k}": 0.0 for k in self.pass_Ks}
+
+        all_results = {f"ARC/pass@{k}": correct[i] / num_evaluated_puzzles for i, k in enumerate(self.pass_Ks)}
 
         return all_results
