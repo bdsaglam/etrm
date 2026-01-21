@@ -1,0 +1,43 @@
+# STAGED TRAINING CONFIG: Frozen Decoder → Joint Training
+#
+# Purpose: Train encoder first with frozen decoder, then unfreeze for joint training
+# This tests if staged training helps encoder learn better task representations
+#
+# Strategy:
+# 1. Phase 1 (0-2500 steps): Encoder trains alone, decoder frozen
+# 2. Phase 2 (2500+ steps): Joint training, both encoder and decoder learn
+#
+# Expected outcome:
+# - Phase 1: Encoder learns basic task representations
+# - Phase 2: Encoder and decoder co-adapt for better performance
+
+defaults:
+  - cfg_pretrain_etrm_arc_agi_1
+  - _self_
+
+# Transfer learning: Load pretrained TRM decoder
+load_pretrained_decoder: ./checkpoints/official_trm/arc_v1_public/step_518071
+
+# Staged training: Freeze decoder for first 2500 steps
+# After 2500 steps, decoder unfreezes and trains jointly with encoder
+freeze_decoder_steps: 2500  # ~2-3 epochs with batch_size=256, full dataset
+
+# CRITICAL: Match TRM hyperparameters
+arch:
+  L_cycles: 4  # Match pretrained decoder training
+
+# Full dataset training
+max_train_groups: null  # Use all training groups (~560)
+max_eval_groups: 32     # Eval on 32 groups for speed
+
+# Training duration
+epochs: 10000
+eval_interval: 5000  # Eval twice during training
+
+# Standard training parameters
+global_batch_size: 256
+lr: 1e-4  # Standard TRM learning rate (not 3e-4 like overfit tests)
+lr_warmup_steps: 2000
+
+# Project naming
+project_name: "etrm-staged"

@@ -34,7 +34,7 @@ encoder_l_layers: 2  # Layers in encoder's L_level (only for trm_style)
 
 # === TRM Decoder Settings (same as ETRM) ===
 # ACT settings - DYNAMIC HALTING
-halt_exploration_prob: 0.5
+halt_exploration_prob: 0.1  # MUST match TRM paper value
 halt_max_steps: 16
 
 # TRM reasoning cycles

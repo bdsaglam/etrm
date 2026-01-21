@@ -1,0 +1,33 @@
+# TEST CONFIG: Frozen Decoder Experiment
+#
+# Purpose: Test if encoder can learn with frozen pretrained decoder
+# This isolates whether gradients flow correctly to the encoder
+#
+# Expected outcome:
+# - If encoder learns (loss decreases), gradients are flowing ✅
+# - If encoder doesn't learn (loss flat), there's a gradient blocking bug ❌
+
+defaults:
+  - cfg_pretrain_etrm_arc_agi_1
+  - _self_
+
+# Override: Load official TRM checkpoint and freeze decoder
+load_pretrained_decoder: ./checkpoints/official_trm/arc_v1_public/step_518071
+freeze_decoder_steps: 999999  # Freeze forever (or set to total steps)
+
+# Use separate optimizer for encoder (so we can see its learning rate)
+encoder_lr_scale: 1.0  # Same LR as decoder would have (but decoder is frozen)
+
+# Smaller scale for quick test
+global_batch_size: 256
+epochs: 20000  # ~2 eval cycles
+eval_interval: 10000
+max_train_groups: 32  # Just 32 groups for quick test
+max_eval_groups: 4    # Quick eval
+
+# Faster LR for encoder-only training
+lr: 3e-4
+lr_warmup_steps: 1000
+
+# Logging
+log_predictions_every: 2000

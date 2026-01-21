@@ -16,8 +16,7 @@ hydra:
 arch:
   L_layers: 2
   H_cycles: 3
-  L_cycles: 6
-  halt_exploration_prob: 0.5  # Controls Q-head exploration during training
+  L_cycles: 4  # Default: more capacity. IMPORTANT: Use L_cycles: 4 when load_pretrained_decoder is set!
   recurrent_encoder_type: recurrent_standard  # Start with simpler Variant A
 
 # Data path - use encoder-mode preprocessed data
@@ -35,7 +34,7 @@ log_predictions_max_samples: 32
 log_predictions_crop: True
 
 # Hyperparams - Training
-global_batch_size: 256
+global_batch_size: 256  # Reduced from TRM's 768 due to encoder memory overhead
 max_demos: 10
 
 epochs: 100000

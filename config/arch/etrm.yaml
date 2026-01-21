@@ -25,12 +25,12 @@ freeze_encoder: False          # Freeze encoder weights (for diagnostic experime
 # ACT settings - DYNAMIC HALTING
 # Training uses dynamic halting with exploration (like original TRM)
 # Q-head learns to predict correctness through exploration
-halt_exploration_prob: 0.5   # Exploration probability during training
+halt_exploration_prob: 0.1   # Exploration probability during training (MUST match TRM paper)
 halt_max_steps: 16           # Max steps before forced halt
 
 # TRM reasoning cycles
 H_cycles: 3
-L_cycles: 6
+L_cycles: 4
 
 H_layers: 0
 L_layers: 2

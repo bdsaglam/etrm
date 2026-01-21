@@ -2,7 +2,6 @@
 install:
     uv venv --allow-existing
     uv sync
-    uv pip install --no-cache-dir --no-build-isolation adam-atan2
     @echo "\n✓ Dependencies installed successfully!"
 
 setup-arc-agi-1-dataset:

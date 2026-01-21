@@ -1,66 +1,159 @@
-# ETRM Final Experiments - Full Dataset Training
-# Goal: Train best architectures to convergence on full dataset
+# ETRM Staged Training Experiments
+# Goal: Test staged training (frozen decoder → joint training) on full dataset
+#
+# Strategy:
+# - Phase 1 (0-2500 steps): Train encoder only, decoder frozen at pretrained weights
+# - Phase 2 (2500-10k epochs): Unfreeze decoder, train jointly
+#
+# Hypothesis:
+# - Encoder learns better task representations when trained alone first
+# - Joint training can then fine-tune both encoder and decoder together
+# - This may prevent encoder from being overwhelmed by decoder gradients
 #
 # Dataset:
 #   - Train: Full training set (~560 puzzle groups)
-#   - Eval: 32 puzzle groups from test set (true generalization test)
-# Duration: 50k epochs per experiment
-# Eval: Every 25k epochs (2 evaluation points per run)
-# Predictions: Logged every 50k steps
+#   - Eval: 32 puzzle groups from test set (for speed)
+# Duration: 10k epochs per experiment (~12-18 hours on 4 GPUs)
+# Eval: Every 5k epochs (2 evaluation points)
 #
-# IMPORTANT: All experiments use pretrained TRM decoder
-# - Pretrained decoder path: /home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071
+# Success criteria:
+# - Test set ARC/pass@1 should improve over overfit experiments
+# - Phase 1: Encoder should learn (train loss decreases)
+# - Phase 2: Joint training should improve test accuracy further
 #
-# Architectures:
-# 1. standard (2-layer): Best semi-final performer (43% train, 1% test)
-# 2. hybrid_variational (4-layer): Cross-attention with KL regularization
-# 3. ETRMTRM recurrent encoder: TBD (deferred)
-# 4. LPN: TBD (after semi-final LPN experiments complete)
+# Architectures to test:
+# 1. standard (2-layer): Simple baseline
+# 2. hybrid_variational (4-layer): Best performer from overfit tests
 #
 # =============================================================================
-# F1: STANDARD ENCODER (2-layer) - BASELINE
+# S1: STANDARD ENCODER (2-layer) - BASELINE
 # =============================================================================
-# Best performer from semi-final: 43% train accuracy, 1% test pass@1
 # Simple architecture, good gradient flow
+# Staged training: Freeze decoder for 2500 steps, then joint train
 
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F1_standard" arch.encoder_type=standard arch.encoder_num_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_staged_training +run_name="S1_standard"
 
 # =============================================================================
-# F2: HYBRID VARIATIONAL (4-layer) - CROSS-ATTENTION WITH KL
+# S2: HYBRID VARIATIONAL (4-layer) - BEST FROM OVERFIT
 # =============================================================================
 # Cross-attention architecture with variational bottleneck
-# KL weight 1e-4 to regularize latent space
+# Expected to perform best based on overfit experiments
 
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F2_hybrid_var" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 arch.loss.kl_weight=0.0001 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=128 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
-
-# =============================================================================
-# F3: ETRMTRM TRM-STYLE ENCODER (from E0c)
-# =============================================================================
-# TRM-style recurrent encoder with H/L loops (Variant B)
-# Config from E0c: h_cycles=3, l_cycles=1, l_layers=2
-
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_pretrain_etrmtrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F3_etrmtrm" arch.recurrent_encoder_type=trm_style arch.encoder_h_cycles=3 arch.encoder_l_cycles=1 arch.encoder_l_layers=2 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_staged_training +run_name="S2_hybrid_var" arch.encoder_type=hybrid_variational arch.encoder_num_layers=4 global_batch_size=128
 
 # =============================================================================
-# F4: LPN PAPER-EXACT VARIATIONAL (from LPN2_paper_var - best LPN performer)
+# S3: ETRMTRM TRM-STYLE ENCODER
 # =============================================================================
-# Paper-exact LPN with per-demo VAE: 2 layers, 128 hidden, LayerNorm, SiLU
-# 673K params - smallest encoder, best LPN semi-final result
+# Recurrent encoder with H/L loops matching decoder architecture
+# Most complex architecture - tests if recurrence helps
 
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_pretrain_etrm_arc_agi_1 load_pretrained_decoder=/home/baris/repos/trm/checkpoints/Arc1concept-aug-1000-ACT-torch/pretrain_att_arc1concept_4/step_518071 +project_name="etrm-final" +run_name="F4_lpn_var" arch.encoder_type=lpn_var arch.loss.kl_weight=0.0001 arch.halt_max_steps=16 arch.halt_exploration_prob=0.5 global_batch_size=256 epochs=50000 eval_interval=25000 max_eval_groups=32 log_predictions_every=50000
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_staged_training +run_name="S3_etrmtrm" arch.recurrent_encoder_type=trm_style arch.encoder_h_cycles=3 arch.encoder_l_cycles=4 global_batch_size=128
 
+# =============================================================================
+# S4: LPN PAPER-EXACT VARIATIONAL
+# =============================================================================
+# Smallest encoder (673K params)
+# Tests if compact architecture can still learn with staged training
+
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_staged_training +run_name="S4_lpn_var" arch.encoder_type=lpn_var
+
+# =============================================================================
+# WHAT TO WATCH (Real-time in WandB)
+# =============================================================================
+#
+# Phase 1 Metrics (Steps 0-2500, Decoder Frozen):
+# 1. train/decoder_frozen: Should be 1
+# 2. grad/encoder_norm: 0.1-1.0 (encoder learning)
+# 3. grad/inner_norm: 0 (decoder frozen)
+# 4. train/lm_loss: Should decrease (encoder learning)
+# 5. train/encoder_token_std: Should increase (diversity)
+#
+# Phase 2 Metrics (Steps 2500+, Joint Training):
+# 6. train/decoder_frozen: Should become 0
+# 7. grad/encoder_norm: Should remain stable
+# 8. grad/inner_norm: Should become >0 (decoder learning)
+# 9. train/lm_loss: Should continue decreasing
+# 10. ARC/pass@1: Should improve (critical!)
+#
+# Key Comparison:
+# - Compare to overfit experiments (O1-O4)
+# - Full dataset should → better generalization
+# - Staged training should → higher test accuracy
+#
+# =============================================================================
+# EXPECTED OUTCOMES
+# =============================================================================
+#
+# Scenario A: Staged Training Helps ✅
+#   Phase 1: Encoder learns task representations (train loss decreases)
+#   Phase 2: Joint training improves further
+#   Test accuracy: 10-20% (significant improvement over overfit 5-15%)
+#   → Conclusion: Staged training prevents encoder from being overwhelmed
+#
+# Scenario B: Joint Training Hurts ❌
+#   Phase 1: Encoder learns well
+#   Phase 2: Test accuracy drops when decoder unfreezes
+#   → Conclusion: Decoder gradients interfere with encoder learning
+#   → Action: Try longer frozen phase or slower encoder LR
+#
+# Scenario C: No Improvement Over Overfit ⚠️
+#   Test accuracy: Similar to overfit experiments (5-15%)
+#   → Conclusion: Full dataset doesn't help, or 10k epochs not enough
+#   → Action: Try longer training (50k epochs) or stronger encoder
+#
+# =============================================================================
+# VERIFICATION COMMANDS
+# =============================================================================
+#
+# After training, check decoder weights diverged from pretrained:
+# for run in S1_standard S2_hybrid_var S3_etrmtrm S4_lpn_var; do
+#   python scripts/verify_decoder_loading.py \
+#     --trm-checkpoint ./checkpoints/official_trm/arc_v1_public/step_518071 \
+#     --etrm-checkpoint ./checkpoints/etrm-staged/$run/step_10000
+# done
+#
+# Expected: Decoder weights should NOT match 100% (decoder trained in phase 2)
+#
+# Compare metrics:
+# - Overfit (O1-O4): 32 groups, 20k epochs, frozen decoder
+# - Staged (S1-S4): Full dataset, 10k epochs, staged training
+#
+# =============================================================================
+# NEXT STEPS AFTER RESULTS
+# =============================================================================
+#
+# If Scenario A (Staged Training Helps):
+#   1. Great! Staged training improves performance
+#   2. Run longer training (50k epochs) on best architecture
+#   3. Try different freeze durations (1k, 5k, 10k steps)
+#   4. Expected final: 25-35% test accuracy
+#
+# If Scenario B (Joint Training Hurts):
+#   1. Keep decoder frozen permanently (best from overfit experiments)
+#   2. Or try encoder_lr_scale=0.1 (slower encoder in phase 2)
+#   3. Or try longer freeze phase (5k-10k steps)
+#
+# If Scenario C (No Improvement):
+#   1. Run 50k epochs (may need more training)
+#   2. Try stronger encoder architecture
+#   3. Investigate why full dataset doesn't help
+#
 # =============================================================================
 # NOTES
 # =============================================================================
 #
-# Expected timeline: ~2-3 days per experiment on 4xGPU
+# Key differences from overfit experiments:
+# - Dataset: Full training set (~560 groups) vs 32 groups
+# - Duration: 10k epochs vs 20k epochs
+# - Decoder: Unfreezes after 2500 steps vs stays frozen
+# - Learning rate: 1e-4 (standard) vs 3e-4 (fast overfit)
+# - Expected: Better generalization due to more data
 #
-# Success criteria:
-# - Primary: Test set ARC/pass@1 (target: >5% for true generalization)
-# - Secondary: Train/test gap (smaller = better generalization)
-# - Diagnostic: Gradient health, encoder variance
+# Staged training rationale:
+# - Encoder needs time to learn task representations first
+# - Joint training from start may overwhelm encoder with decoder gradients
+# - Staged approach gives encoder a "head start"
 #
-# After experiments complete:
-# 1. Run analysis notebook with PROJECT="etrm-final"
-# 2. Compare test set generalization across architectures
-# 3. Analyze failure cases and prediction patterns
+# Timeline: ~12-18 hours per experiment on 4 GPUs
+# Total: ~48-72 hours for all 4 architectures
+#
