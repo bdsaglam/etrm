@@ -83,6 +83,13 @@ class DemoEncoderConfig(BaseModel):
     variational: bool = False  # Use VAE-style encoding (deprecated, use encoder_type)
     kl_weight: float = 0.001   # Weight for KL divergence loss (beta-VAE)
 
+    # === LPN-specific settings ===
+    # Latent dimension for LPN variational encoder
+    # Default: 32 (paper value), but can increase to match other encoders
+    # For comparison: standard encoder uses 16 tokens × 512 dims = 8192 total
+    # Recommended: 512 (16 tokens × 512 = 8192 dims, same capacity as other encoders)
+    lpn_latent_dim: int = 32
+
     # === Contrastive learning settings ===
     contrastive: bool = False  # Use contrastive loss
     contrastive_weight: float = 0.1  # Weight for contrastive loss

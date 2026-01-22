@@ -349,23 +349,23 @@ class LPNVariationalEncoder(BaseDemoEncoder):
     - Mean aggregation after sampling
     - Projects to TRM's expected output format
 
-    Architecture (hardcoded to match paper):
+    Architecture (from paper, latent_dim configurable):
     - 2 layers, 128 hidden (8 heads × 16 dim)
-    - Latent dim: 32
+    - Latent dim: configurable (default 32 from paper, can increase to 512)
     - LayerNorm, SiLU MLP, absolute 2D embeddings
     """
 
-    # Paper defaults (hardcoded)
+    # Paper defaults (hardcoded architecture)
     LPN_HIDDEN_SIZE = 128
     LPN_NUM_LAYERS = 2
     LPN_NUM_HEADS = 8
-    LPN_LATENT_DIM = 32
 
     def __init__(self, config: DemoEncoderConfig):
         super().__init__(config)
 
         self.internal_hidden = self.LPN_HIDDEN_SIZE
-        self.latent_dim = self.LPN_LATENT_DIM
+        # Use configurable latent_dim (default 32 from paper)
+        self.latent_dim = config.lpn_latent_dim
 
         # Grid encoder matching paper exactly
         self.grid_encoder = LPNPaperGridEncoder(
@@ -380,16 +380,16 @@ class LPNVariationalEncoder(BaseDemoEncoder):
         )
 
         # Variational projections (per-demo, like LPN paper)
-        # LPN projects to latent_dim (32), not hidden_size
-        self.mu_proj = nn.Linear(self.LPN_HIDDEN_SIZE, self.LPN_LATENT_DIM, bias=False)
-        self.logvar_proj = nn.Linear(self.LPN_HIDDEN_SIZE, self.LPN_LATENT_DIM, bias=False)
+        # LPN projects to latent_dim (configurable, default 32 from paper)
+        self.mu_proj = nn.Linear(self.LPN_HIDDEN_SIZE, self.latent_dim, bias=False)
+        self.logvar_proj = nn.Linear(self.LPN_HIDDEN_SIZE, self.latent_dim, bias=False)
 
         # Initialize logvar to output near-zero
         nn.init.zeros_(self.logvar_proj.weight)
 
         # Project from latent to TRM's expected output
         self.output_proj = nn.Linear(
-            self.LPN_LATENT_DIM,
+            self.latent_dim,
             config.output_tokens * config.hidden_size,
             bias=False,
         )

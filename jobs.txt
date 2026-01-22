@@ -47,7 +47,7 @@
 # Recurrent encoder with H/L loops matching decoder architecture
 # Most complex architecture - tests if recurrence helps
 
-[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_staged_training +run_name="S3_etrmtrm" arch.recurrent_encoder_type=trm_style arch.encoder_h_cycles=3 arch.encoder_l_cycles=4 global_batch_size=128
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrmtrm.py --config-name cfg_staged_training +run_name="S3_etrmtrm" global_batch_size=128
 
 # =============================================================================
 # S4: LPN PAPER-EXACT VARIATIONAL

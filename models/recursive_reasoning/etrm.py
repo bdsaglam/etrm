@@ -509,9 +509,32 @@ class TRMWithEncoder(nn.Module):
             encoder_diagnostics["encoder_output_mean"] = context.mean().item()
             encoder_diagnostics["encoder_output_std"] = context.std().item()
             encoder_diagnostics["encoder_output_norm"] = context.norm(dim=-1).mean().item()
-            batch_mean = context.mean(dim=0, keepdim=True)
+
+            # Cross-sample variance: variance across batch samples
+            # Samples may be from different puzzles, augmentations, or test queries
+            # This should be HIGH if encoder learns diverse representations
+            batch_mean = context.mean(dim=0, keepdim=True)  # (1, T, D)
             cross_sample_var = ((context - batch_mean) ** 2).mean()
             encoder_diagnostics["encoder_cross_sample_var"] = cross_sample_var.item()
+
+            # Within-group variance: variance among samples from same puzzle group
+            # Uses puzzle_identifiers to group samples (same puzzle, different aug/query)
+            # This should be LOW if encoder is robust to augmentations
+            puzzle_ids = new_current_data["puzzle_identifiers"]  # (B,)
+            unique_ids, counts = torch.unique(puzzle_ids, return_counts=True)
+            multi_sample_groups = unique_ids[counts > 1]
+
+            if len(multi_sample_groups) > 0:
+                within_group_vars = []
+                for group_id in multi_sample_groups:
+                    mask = (puzzle_ids == group_id)
+                    group_context = context[mask]  # (N_group, T, D) where N_group >= 2
+                    group_mean = group_context.mean(dim=0, keepdim=True)
+                    group_var = ((group_context - group_mean) ** 2).mean()
+                    within_group_vars.append(group_var)
+
+                encoder_diagnostics["encoder_within_group_var"] = torch.stack(within_group_vars).mean().item()
+
             encoder_diagnostics["encoder_token_std"] = context.std(dim=0).mean().item()
 
         # Reset inner carry for halted samples
@@ -620,9 +643,32 @@ class TRMWithEncoder(nn.Module):
             encoder_diagnostics["encoder_output_mean"] = context.mean().item()
             encoder_diagnostics["encoder_output_std"] = context.std().item()
             encoder_diagnostics["encoder_output_norm"] = context.norm(dim=-1).mean().item()
-            batch_mean = context.mean(dim=0, keepdim=True)
+
+            # Cross-sample variance: variance across batch samples
+            # Samples may be from different puzzles, augmentations, or test queries
+            # This should be HIGH if encoder learns diverse representations
+            batch_mean = context.mean(dim=0, keepdim=True)  # (1, T, D)
             cross_sample_var = ((context - batch_mean) ** 2).mean()
             encoder_diagnostics["encoder_cross_sample_var"] = cross_sample_var.item()
+
+            # Within-group variance: variance among samples from same puzzle group
+            # Uses puzzle_identifiers to group samples (same puzzle, different aug/query)
+            # This should be LOW if encoder is robust to augmentations
+            puzzle_ids = new_current_data["puzzle_identifiers"]  # (B,)
+            unique_ids, counts = torch.unique(puzzle_ids, return_counts=True)
+            multi_sample_groups = unique_ids[counts > 1]
+
+            if len(multi_sample_groups) > 0:
+                within_group_vars = []
+                for group_id in multi_sample_groups:
+                    mask = (puzzle_ids == group_id)
+                    group_context = context[mask]  # (N_group, T, D) where N_group >= 2
+                    group_mean = group_context.mean(dim=0, keepdim=True)
+                    group_var = ((group_context - group_mean) ** 2).mean()
+                    within_group_vars.append(group_var)
+
+                encoder_diagnostics["encoder_within_group_var"] = torch.stack(within_group_vars).mean().item()
+
             encoder_diagnostics["encoder_token_std"] = context.std(dim=0).mean().item()
 
         # Reset inner carry for halted samples

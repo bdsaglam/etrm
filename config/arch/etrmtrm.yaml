@@ -15,7 +15,7 @@ loss:
   kl_weight: 0.0001  # KL divergence weight for variational encoders
 
 # === Recurrent Encoder Settings ===
-recurrent_encoder_type: recurrent_standard  # "recurrent_standard" or "trm_style"
+recurrent_encoder_type: trm_style  # "recurrent_standard" or "trm_style" - DEFAULT: trm_style for symmetry with decoder
 
 # Base encoder settings (for both variants)
 encoder_type: standard  # Unused in recurrent mode, kept for compatibility
@@ -25,11 +25,13 @@ encoder_set_layers: 1
 encoder_layer_scale_init: 0.0
 encoder_norm_style: post
 encoder_qk_norm: False
+lpn_latent_dim: 32     # LPN variational latent dimension (default 32, try 512)
 freeze_encoder: False
 
 # For TRM-style encoder (Variant B only)
+# NOTE: When using with pretrained decoder (L_cycles=4), set encoder_l_cycles=4 to match
 encoder_h_cycles: 3  # H-level iterations in encoder (only for trm_style)
-encoder_l_cycles: 1  # L-level iterations per H-cycle (only for trm_style)
+encoder_l_cycles: 4  # L-level iterations per H-cycle (only for trm_style) - MATCHES DECODER
 encoder_l_layers: 2  # Layers in encoder's L_level (only for trm_style)
 
 # === TRM Decoder Settings (same as ETRM) ===
@@ -37,9 +39,10 @@ encoder_l_layers: 2  # Layers in encoder's L_level (only for trm_style)
 halt_exploration_prob: 0.1  # MUST match TRM paper value
 halt_max_steps: 16
 
-# TRM reasoning cycles
+# TRM reasoning cycles (decoder)
+# NOTE: Default L_cycles=6 for more capacity. Use L_cycles=4 when loading pretrained decoder.
 H_cycles: 3
-L_cycles: 6
+L_cycles: 4  # Changed from 6 to 4 to match pretrained TRM decoder by default
 
 H_layers: 0
 L_layers: 2

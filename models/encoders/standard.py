@@ -459,6 +459,11 @@ class DemoSetEncoder(nn.Module):
         for layer in self.layers:
             context = layer(context, demo_encodings, attn_bias)
 
+        # Final normalization (CRITICAL FIX)
+        # Without this, context can have unbounded scale, causing instability
+        # especially in variational encoders that pool and project this output
+        context = rms_norm(context, variance_epsilon=self.norm_eps)
+
         return context
 
 

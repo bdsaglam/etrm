@@ -20,6 +20,7 @@ encoder_set_layers: 1          # Depth of set encoder (cross-attention layers)
 encoder_layer_scale_init: 0.0  # CaiT layer scale (0 = disabled, try 1e-4)
 encoder_norm_style: post       # "pre" or "post" normalization
 encoder_qk_norm: False         # QK normalization in attention
+lpn_latent_dim: 32             # LPN variational latent dimension (default 32, try 512)
 freeze_encoder: False          # Freeze encoder weights (for diagnostic experiments)
 
 # ACT settings - DYNAMIC HALTING
