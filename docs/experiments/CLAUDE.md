@@ -245,31 +245,19 @@ These metrics reveal whether the encoder is learning useful, diverse representat
 
 | Metric | Purpose | What to Look For |
 |--------|---------|------------------|
-| `train/encoder_cross_sample_var` | Variance of encoder outputs across all samples in batch (mix of different puzzles, augmentations, test queries) | **Higher = better diversity**; low values (<0.1) suggest encoder produces similar outputs for all puzzles (collapsed representations) |
+| `train/encoder_cross_sample_var` | Variance of encoder outputs across all samples in batch (mix of different puzzles, augmentations, test queries) | **Higher = better diversity**; low values suggest encoder produces similar outputs for all puzzles (collapsed representations) |
 | `train/encoder_within_group_var` | Variance among samples from SAME puzzle group (same puzzle, different augmentation or test query) | **Lower = better augmentation robustness**; measures if encoder gives consistent outputs for same puzzle despite augmentation; computed only when batch has duplicate puzzle_ids |
 | `train/encoder_output_mean` | Mean of encoder outputs | Should be close to 0 (properly normalized) |
 | `train/encoder_output_norm` | L2 norm of encoder outputs | Depends on architecture; should be stable, not exploding/vanishing |
 | `train/encoder_output_std` | Standard deviation of encoder outputs | Should be ~1.0 for normalized outputs |
 | `train/encoder_token_std` | Standard deviation across tokens within a sample | Higher = more varied representations across tokens |
 
-**Critical Metrics**:
-
-**1. `train/encoder_cross_sample_var`** (Diversity across different samples)
-- **Good**: >0.3 (encoder produces diverse representations for different puzzles/augmentations)
-- **Warning**: 0.1-0.3 (limited diversity, but may still work)
-- **Bad**: <0.1 (encoder producing nearly identical outputs → likely failing to learn patterns)
-
-**2. `train/encoder_within_group_var`** (Robustness to augmentation)
-- **Good**: <0.05 (encoder gives consistent outputs for same puzzle despite augmentation)
-- **Warning**: 0.05-0.1 (somewhat sensitive to augmentation)
-- **Bad**: >0.1 (encoder highly sensitive to augmentation, may indicate instability)
-
 **Interpretation**:
-- High `cross_sample_var` + Low `within_group_var` = **Ideal** (diverse across tasks, robust to augmentation)
-- Low `cross_sample_var` + Low `within_group_var` = **Representation collapse** (all puzzles get similar outputs)
-- High `cross_sample_var` + High `within_group_var` = **Overly sensitive** (diverse but unstable to augmentation)
+- **High `cross_sample_var` + Low `within_group_var`** = **Ideal** (diverse across tasks, robust to augmentation)
+- **Low `cross_sample_var` + Low `within_group_var`** = **Representation collapse** (all puzzles get similar outputs)
+- **High `cross_sample_var` + High `within_group_var`** = **Overly sensitive** (diverse but unstable to augmentation)
 
-**Example**: If `cross_sample_var` is 0.08 and `within_group_var` is 0.02, encoder has representation collapse (low diversity across different tasks). If `cross_sample_var` is 0.15 and `within_group_var` is 0.03, encoder is working well.
+**Note**: We don't have enough data to establish specific numerical thresholds. Focus on relative comparisons between architectures rather than absolute values.
 
 ### Gradient Metrics
 
@@ -354,15 +342,13 @@ During the overfit phase (32 groups, target >90% train accuracy), focus on these
    - If stuck at 35-50%: Check for bugs (gradient flow, data issues)
 
 2. **`train/encoder_cross_sample_var`** (Encoder Diversity)
-   - Target: >0.3
-   - Warning zone: 0.1-0.3
-   - Failure: <0.1 (encoder not learning diverse patterns)
+   - **Higher is better** (encoder produces diverse representations for different puzzles)
+   - Compare across architectures: higher = better diversity
    - **Check this early** (within first 100 steps)
 
 3. **`train/encoder_within_group_var`** (Augmentation Robustness)
-   - Target: <0.05 (consistent outputs for same puzzle)
-   - Warning zone: 0.05-0.1
-   - Failure: >0.1 (overly sensitive to augmentation)
+   - **Lower is better** (encoder gives consistent outputs for same puzzle despite augmentation)
+   - Compare across architectures: lower = more robust to augmentation
    - **Interpret with cross_sample_var**: Want HIGH cross + LOW within
 
 4. **`grad/encoder_norm`** (Gradient Flow)
@@ -392,26 +378,31 @@ During the overfit phase (32 groups, target >90% train accuracy), focus on these
 Within the first 100 steps, verify:
 
 ```
-✅ grad/encoder_norm > 0.2          (encoder getting gradients)
-✅ encoder_cross_sample_var > 0.15  (encoder showing some diversity)
-✅ train/accuracy improving         (model learning something)
-✅ train/steps < halt_max_steps     (not always maxing out)
+✅ grad/encoder_norm > 0.2               (encoder getting gradients)
+✅ encoder_cross_sample_var increasing   (encoder showing diversity)
+✅ encoder_within_group_var stable/low   (robust to augmentation)
+✅ train/accuracy improving              (model learning something)
+✅ train/steps < halt_max_steps          (not always maxing out)
 ```
 
 If any of these fail, diagnose immediately:
 - Low encoder gradients → Check encoder architecture, loss computation
-- Low variance → Encoder architecture may be too weak or initialization issue
+- Low cross_sample_var → Encoder architecture may be too weak or initialization issue
+- High within_group_var → Encoder overly sensitive to augmentation (instability)
 - Not improving → Bug in training loop, data loading, or loss computation
 - Always maxing steps → Halting mechanism not working
+
+**Note**: Focus on relative changes and comparisons between architectures, not absolute threshold values.
 
 #### Example: Good vs Bad Runs
 
 **Good Run** (E1a_baseline at step 749):
 ```
-train/exact_accuracy:         23.8%  (improving, will reach >90%)
-train/encoder_cross_sample_var: 0.13  (borderline, but working)
-grad/encoder_norm:            0.20   (healthy gradient flow)
-train/steps:                  6.2    (reasonable, not maxing out)
+train/exact_accuracy:           23.8%  (improving, will reach >90%)
+train/encoder_cross_sample_var:  0.13   (reasonable, showing diversity)
+train/encoder_within_group_var:  0.03   (low, robust to augmentation)
+grad/encoder_norm:              0.20   (healthy gradient flow)
+train/steps:                    6.2    (reasonable, not maxing out)
 ```
 
 **Bad Run** (Previous cached ETRM):
@@ -440,7 +431,8 @@ Create a custom W&B dashboard with these panels:
 - `ARC/pass@1` (voting performance)
 
 **Panel 2: Encoder Health**
-- `train/encoder_cross_sample_var`
+- `train/encoder_cross_sample_var` (diversity)
+- `train/encoder_within_group_var` (augmentation robustness)
 - `grad/encoder_norm`
 - `grad/total_norm` (for reference)
 

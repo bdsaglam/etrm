@@ -77,7 +77,16 @@
 # 16 tokens × 512 dims = 8,192 total dims (same as O1/O3)
 # This tests if low cross-sample variance was due to 32-dim bottleneck
 
-[-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_test_frozen_decoder_corrected +run_name="O4b_lpn_var_512" arch.encoder_type=lpn_var arch.lpn_latent_dim=512 [356162]
+[-] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_test_frozen_decoder_corrected +run_name="O4b_lpn_var_512" arch.encoder_type=lpn_var arch.lpn_latent_dim=512 [364199]
+
+# =============================================================================
+# O4c: LPN VARIATIONAL - 10x KL WEIGHT (512 dims)
+# =============================================================================
+# Tests if low cross-sample variance is due to kl_weight=0.0001 being too small
+# Increased from 0.0001 to 0.001 (10x higher) to enforce stochasticity
+# Expected: Higher variance, potentially better diversity if kl_weight was limiting factor
+
+[ ] torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain_etrm.py --config-name cfg_test_frozen_decoder_corrected +run_name="O4c_lpn_var_512_10xkl" arch.encoder_type=lpn_var arch.lpn_latent_dim=512 arch.kl_weight=0.001
 
 # =============================================================================
 # WHAT TO WATCH (Real-time in WandB)
@@ -143,20 +152,28 @@
 #   → Action: Problem is not just hyperparameters
 #   → Investigate: Training dynamics, learning rate scheduling, etc.
 #
-# Scenario D: LPN Latent Dim Comparison (O4a vs O4b) 🔬
-#   O4a (32 dims):
-#   - encoder_cross_sample_var: ~0.05 (LOW, representation collapse)
-#   - encoder_within_group_var: TBD (if ~0: effectively deterministic)
-#   - ARC/pass@1: 5-10% (limited by small bottleneck?)
+# Scenario D: LPN Variants Comparison (O4a vs O4b vs O4c) 🔬
 #
-#   O4b (512 dims):
-#   - encoder_cross_sample_var: >0.1 (HIGH, better diversity expected)
-#   - encoder_within_group_var: >0.01 (stochastic if kl_weight enforced)
-#   - ARC/pass@1: 10-15% (improved due to higher capacity?)
+#   O4a (32 dims, kl=0.0001):
+#   - encoder_cross_sample_var: LOW (representation collapse)
+#   - encoder_within_group_var: LOW
+#   - ARC/pass@1: Baseline performance
 #
-#   If O4b >> O4a: Confirms 32-dim bottleneck hypothesis
-#   If O4b ≈ O4a: Issue is not capacity, may be architecture design
-#   → Action: Use O4b (512 dims) for staged training if significantly better
+#   O4b (512 dims, kl=0.0001):
+#   - encoder_cross_sample_var: Similar to O4a (capacity not the issue)
+#   - encoder_within_group_var: LOW
+#   - ARC/pass@1: Similar to O4a
+#   → Conclusion: 32→512 dims doesn't help, kl_weight is the limiting factor
+#
+#   O4c (512 dims, kl=0.001 - 10x higher):
+#   - encoder_cross_sample_var: Should be HIGHER than O4a/O4b if kl_weight was limiting
+#   - encoder_within_group_var: Should be HIGHER (more stochasticity)
+#   - ARC/pass@1: Should improve if representation collapse was due to kl_weight
+#
+#   Interpretation:
+#   - If O4c >> O4b: Confirms kl_weight=0.0001 was too low (collapsed to deterministic)
+#   - If O4c ≈ O4b: Issue is LPN architecture design, not hyperparameters
+#   → Action: If O4c improves, use kl_weight=0.001 for staged training
 #
 # =============================================================================
 # VERIFICATION COMMANDS
